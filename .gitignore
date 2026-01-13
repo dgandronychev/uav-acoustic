@@ -3,6 +3,32 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# ===== CMake / Qt (project specific) =====
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+qt_bridge_autogen/
+*_autogen/
+
+# ===== Qt generated =====
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# ===== ML / DSP artifacts =====
+*.tflite
+*.onnx
+*.pt
+models/
+artifacts/
+
+# ===== Runtime data =====
+segments/
+captures/
+*.wav
+*.flac
+
 # User-specific files
 *.rsuser
 *.suo

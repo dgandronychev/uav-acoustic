@@ -8,8 +8,9 @@
 #include <atomic>
 #include <memory>
 #include <algorithm>
-#include <cmath>
 #include <vector>
+#include <deque>
+#include <iostream>
 
 #include "core/telemetry/telemetry_bus.h"
 #include "core/telemetry/telemetry_snapshot.h"
@@ -20,6 +21,11 @@
 #include "core/dsp/pcen_extractor.h"
 #include "core/dsp/pcen_ring_buffer.h"
 
+#include "core/detect/mock_detector.h"
+
+// NEW:
+#include "core/segment/segment_builder.h"
+
 #include "qt_bridge/telemetry_provider.h"
 #include "qt_bridge/pcen_image_provider.h"
 
@@ -28,125 +34,95 @@ static std::int64_t now_ns() {
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-static float clamp01(float x) {
-    if (x < 0.0f) return 0.0f;
-    if (x > 1.0f) return 1.0f;
-    return x;
-}
-
-static float sigmoid(float x) {
-    // безопасная сигмоида
-    if (x > 20.0f) return 1.0f;
-    if (x < -20.0f) return 0.0f;
-    return 1.0f / (1.0f + std::exp(-x));
-}
-
-// RMS->dBFS (примерно), вход float [-1..1]
-static float rms_db(const float* x, int n) {
-    if (!x || n <= 0) return -120.0f;
-    double acc = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const double v = static_cast<double>(x[i]);
-        acc += v * v;
-    }
-    const double mean = acc / static_cast<double>(n);
-    const double rms = std::sqrt(mean);
-    const double eps = 1e-12;
-    const double db = 20.0 * std::log10(rms + eps);
-    // ограничим «пол» для стабильности
-    if (db < -120.0) return -120.0f;
-    return static_cast<float>(db);
-}
-
 int main(int argc, char* argv[]) {
     QGuiApplication app(argc, argv);
 
     auto bus = std::make_shared<core::telemetry::TelemetryBus>();
 
-    // ---------- PCEN DSP ----------
+    // --- PCEN ring buffer (for UI heatmap) ---
     auto pcen_rb = std::make_shared<core::dsp::PcenRingBuffer>(
         /*n_mels=*/64,
-        /*capacity_frames=*/1500  // ~15s при hop=10ms (100 fps)
+        /*capacity_frames=*/1500  // ~15s if hop ~10ms
     );
 
     core::dsp::PcenConfig pcfg;
     pcfg.sample_rate = 16000;
     pcfg.n_fft = 512;
-    pcfg.win_length = 400;   // 25ms @16k
-    pcfg.hop_length = 160;   // 10ms @16k
+    pcfg.win_length = 400;
+    pcfg.hop_length = 160;  // 10ms at 16k
     pcfg.n_mels = 64;
-    // PCEN параметры (можешь тюнить позже):
-    // pcfg.s = 0.025f; pcfg.alpha = 0.98f; pcfg.delta = 2.0f; pcfg.r = 0.5f;
-
     core::dsp::PcenExtractor pcen(pcfg);
+
+    // --- Mock VAD detector ---
+    core::detect::MockDetector::Config dcfg;
+    dcfg.sample_rate = 16000;
+    dcfg.frame_ms = 20;
+    dcfg.norm_alpha = 0.01f;
+    dcfg.p_ema_alpha = 0.20f;
+    dcfg.sigmoid_k = 1.2f;
+    dcfg.sigmoid_bias = 0.0f;
+    dcfg.p_on = 0.65f;
+    dcfg.p_off = 0.45f;
+    dcfg.t_confirm_ms = 200;
+    dcfg.t_release_ms = 300;
+    core::detect::MockDetector det(dcfg);
+
+    // --- FSM (���������� 5) ��������� ---
+    const float p_on = 0.65f;
+    const float p_off = 0.45f;
+    const int t_confirm_ms = 200;
+    const int t_release_ms = 300;
+    const int cooldown_ms = 800;
+
+    core::telemetry::FsmState fsm = core::telemetry::FsmState::IDLE;
+    int above_ms = 0;
+    int below_ms = 0;
+    int cooldown_left_ms = 0;
+
+    // --- SegmentBuilder (���������� 6) ---
+    core::segment::SegmentBuilder::Config scfg;
+    scfg.n_mels = 64;
+    scfg.hop_ms = 10;           // ������������� pcfg.hop_length=160 @ 16k
+    scfg.pre_roll_ms = 2000;    // 2s �� ������
+    scfg.post_roll_ms = 2000;   // 2s ����� �����
+    scfg.max_event_ms = 12000;  // ������
+    scfg.out_dir = "segments";
+
+    core::segment::SegmentBuilder segment_builder(pcen_rb, scfg);
 
     QQmlApplicationEngine engine;
 
-    // Heatmap provider
     auto* pcenProvider = new qt_bridge::PcenImageProvider();
     engine.addImageProvider("pcen", pcenProvider);
 
-    // UI polling provider
     auto* telemetry = new qt_bridge::TelemetryProvider(bus, pcen_rb, pcenProvider);
-    // ВАЖНО: в твоём текущем коде метод называется Start (с большой буквы)
     telemetry->Start(12);
     engine.rootContext()->setContextProperty("telemetry", telemetry);
 
-    // ---------- Audio + PCEN + MockDetector thread ----------
     std::atomic<bool> running{ true };
 
     std::thread audio_thread([&] {
-        // 1) путь к flac: можно потом вынести в argv/config
         std::string path =
-            "C:/Users/Owner/_pish/test_orig.flac";
+            "C:/Users/Owner/_pish/II_Project/II_Project/datasets/uav_audio/raw/Mavik_3T/flight_026.flac";
 
         core::audio::AudioSourceConfig acfg;
         acfg.sample_rate = 16000;
         acfg.channels = 1;
-        acfg.chunk_ms = 20;    // 20ms
+        acfg.chunk_ms = 20;
         acfg.realtime = true;
         acfg.loop = true;
 
         core::audio::SndfileReplaySource src(path);
         if (!src.Open(acfg)) {
-            // Если не открылось — p_detect будет 0, но UI живёт
-            while (running.load()) {
-                auto s = std::make_shared<core::telemetry::TelemetrySnapshot>();
-                s->t_ns = now_ns();
-                s->p_detect_latest = 0.0f;
-                s->fsm_state = core::telemetry::FsmState::IDLE;
-                s->timeline_n = 0;
-                bus->Publish(std::move(s));
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));
-            }
+            while (running.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
             return;
         }
 
-        std::vector<float> pcen_frames;  // packed: frames x mels
-        pcen_frames.reserve(64 * 64);
+        std::vector<float> pcen_frames;
+        pcen_frames.reserve(64 * 32);
 
-        // 2) MockDetector: EMA mean/var по dB и sigmoid->p
-        bool stats_inited = false;
-        float mu = -60.0f;      // EMA mean dB
-        float var = 100.0f;     // EMA var
-        const float ema = 0.02f;  // скорость адаптации
-        const float k = 2.0f;     // крутизна sigmoid
-
-        // 3) FSM (минимальный гистерезис)
-        // Если у тебя enum только IDLE/CANDIDATE/ACTIVE — используем их.
-        core::telemetry::FsmState state = core::telemetry::FsmState::IDLE;
-        const float p_on = 0.65f;
-        const float p_off = 0.45f;
-        int on_count = 0;
-        int off_count = 0;
-        // подтверждение: примерно 200мс (10 чанков по 20мс)
-        const int on_confirm = 10;
-        const int off_confirm = 10;
-
-        // timeline p_detect
-        constexpr int kHist = 64;
-        float hist[kHist]{};
-        int hist_i = 0;
+        std::deque<float> p_hist;
+        const int kHistN = 64;
 
         while (running.load()) {
             auto chunk = src.Read();
@@ -158,9 +134,9 @@ int main(int argc, char* argv[]) {
             const int frames = chunk->frames;
             const int ch = chunk->channels;
 
-            // mono float
             std::vector<float> mono(static_cast<std::size_t>(frames), 0.0f);
             const float* inter = chunk->interleaved.data();
+
             if (ch == 1) {
                 std::copy(inter, inter + frames, mono.begin());
             }
@@ -172,87 +148,130 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // ---- PCEN update (подсистема 3 продолжает работать) ----
+            // PCEN -> ring buffer
             pcen_frames.clear();
             const int produced = pcen.Process(mono.data(), frames, &pcen_frames);
             if (produced > 0) {
                 const int mels = pcen.n_mels();
                 for (int i = 0; i < produced; ++i) {
                     pcen_rb->PushFrame(&pcen_frames[static_cast<std::size_t>(i * mels)]);
+                    segment_builder.OnFramePushed(now_ns()); // after push
                 }
             }
 
-            // ---- MockDetector: энергия по аудио (RMS dB) -> p_detect ----
-            const float db = rms_db(mono.data(), frames);
+            // p_detect
+            const float p = det.Process(mono.data(), frames);
 
-            if (!stats_inited) {
-                mu = db;
-                var = 25.0f;
-                stats_inited = true;
+            // FSM update
+            const int dt_ms = acfg.chunk_ms;
+            bool event_started = false;
+            bool event_ended = false;
+
+            if (cooldown_left_ms > 0) {
+                cooldown_left_ms = std::max(0, cooldown_left_ms - dt_ms);
+                fsm = core::telemetry::FsmState::COOLDOWN;
             }
             else {
-                const float diff = db - mu;
-                mu = (1.0f - ema) * mu + ema * db;
-                var = (1.0f - ema) * var + ema * (diff * diff);
-                if (var < 1e-3f) var = 1e-3f;
-            }
-
-            const float sigma = std::sqrt(var);
-            const float z = (db - mu) / sigma;         // z-score
-            float p = sigmoid(k * z);                  // 0..1
-            // дополнительный пол: если абсолютный db совсем низкий — прижмём
-            if (db < -85.0f) p *= 0.2f;
-            p = clamp01(p);
-
-            // ---- FSM (гистерезис + подтверждение) ----
-            if (state == core::telemetry::FsmState::IDLE) {
-                if (p >= p_on) {
-                    on_count++;
-                    if (on_count >= on_confirm) {
-                        state = core::telemetry::FsmState::ACTIVE;
-                        on_count = 0;
+                switch (fsm) {
+                case core::telemetry::FsmState::IDLE:
+                    if (p >= p_on) {
+                        above_ms += dt_ms;
+                        if (above_ms >= t_confirm_ms) {
+                            fsm = core::telemetry::FsmState::ACTIVE;
+                            event_started = true;
+                            above_ms = 0;
+                            below_ms = 0;
+                        }
+                        else {
+                            fsm = core::telemetry::FsmState::CANDIDATE;
+                        }
                     }
-                }
-                else {
-                    on_count = 0;
-                }
-            }
-            else { // ACTIVE (и/или CANDIDATE если у тебя есть)
-                if (p <= p_off) {
-                    off_count++;
-                    if (off_count >= off_confirm) {
-                        state = core::telemetry::FsmState::IDLE;
-                        off_count = 0;
+                    else {
+                        above_ms = 0;
+                        below_ms = 0;
                     }
-                }
-                else {
-                    off_count = 0;
+                    break;
+
+                case core::telemetry::FsmState::CANDIDATE:
+                    if (p >= p_on) {
+                        above_ms += dt_ms;
+                        if (above_ms >= t_confirm_ms) {
+                            fsm = core::telemetry::FsmState::ACTIVE;
+                            event_started = true;
+                            above_ms = 0;
+                            below_ms = 0;
+                        }
+                    }
+                    else {
+                        // ���������
+                        fsm = core::telemetry::FsmState::IDLE;
+                        above_ms = 0;
+                    }
+                    break;
+
+                case core::telemetry::FsmState::ACTIVE:
+                    if (p <= p_off) {
+                        below_ms += dt_ms;
+                        if (below_ms >= t_release_ms) {
+                            fsm = core::telemetry::FsmState::COOLDOWN;
+                            cooldown_left_ms = cooldown_ms;
+                            event_ended = true;
+                            below_ms = 0;
+                        }
+                    }
+                    else {
+                        below_ms = 0;
+                    }
+                    break;
+
+                case core::telemetry::FsmState::COOLDOWN:
+                default:
+                    // handled above
+                    break;
                 }
             }
 
-            // ---- timeline ring ----
-            hist[hist_i] = p;
-            hist_i = (hist_i + 1) % kHist;
+            const std::int64_t t_ns = now_ns();
 
-            // ---- publish snapshot ----
+            // Segment builder hooks
+            if (event_started) segment_builder.OnEventStart(t_ns);
+            if (event_ended) segment_builder.OnEventEnd(t_ns);
+
+            if (segment_builder.HasReadySegment()) {
+                auto info = segment_builder.PopReadySegment();
+                std::cout << "[SEGMENT] saved: " << info.path
+                    << " frames=" << info.frames
+                    << " n_mels=" << info.n_mels
+                    << std::endl;
+            }
+
+            // history for plot
+            p_hist.push_back(p);
+            while (static_cast<int>(p_hist.size()) > kHistN) p_hist.pop_front();
+
+            // publish telemetry snapshot
             auto s = std::make_shared<core::telemetry::TelemetrySnapshot>();
-            s->t_ns = now_ns();
+            s->t_ns = t_ns;
             s->p_detect_latest = p;
-            s->fsm_state = state;
+            s->fsm_state = fsm;
 
-            s->timeline_n = kHist;
-            const std::int64_t base = s->t_ns - static_cast<std::int64_t>(kHist) * 250'000'000LL; // 0.25s шаг на графике
-            for (int i = 0; i < kHist; ++i) {
-                const int idx = (hist_i + i) % kHist; // oldest -> newest
-                s->timeline[static_cast<std::size_t>(i)].t_ns = base + i * 250'000'000LL;
-                s->timeline[static_cast<std::size_t>(i)].p_detect = hist[idx];
+            // If you already added these fields:
+            s->event_started = event_started;
+            s->event_ended = event_ended;
+
+            s->timeline_n = static_cast<int>(p_hist.size());
+            const std::int64_t step_ns = static_cast<std::int64_t>(acfg.chunk_ms) * 1'000'000LL;
+            const std::int64_t base = s->t_ns - step_ns * static_cast<std::int64_t>(s->timeline_n);
+
+            for (int i = 0; i < s->timeline_n; ++i) {
+                s->timeline[static_cast<std::size_t>(i)].t_ns = base + step_ns * i;
+                s->timeline[static_cast<std::size_t>(i)].p_detect = p_hist[static_cast<std::size_t>(i)];
             }
 
             bus->Publish(std::move(s));
         }
         });
 
-    // Load QML
     engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));
     if (engine.rootObjects().isEmpty()) {
         running.store(false);

@@ -3,6 +3,7 @@
 #include <QQuickImageProvider>
 #include <QImage>
 #include <QMutex>
+
 #include <vector>
 
 namespace qt_bridge {
@@ -11,20 +12,22 @@ namespace qt_bridge {
 	public:
 		PcenImageProvider();
 
-		// rows x cols matrix in row-major (rows=frames, cols=mels)
-		void SetPcenMatrix(std::vector<float> m, int rows, int cols);
+		// frames: packed [n_frames x n_mels], newest at end (как обычно из SnapshotLast)
+		void SetPcenMatrix(const std::vector<float>& frames, int n_mels, int n_frames);
 
 		QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override;
 
 	private:
-		QImage BuildHeatmapLocked() const;
+		static QRgb ColorMap(float t);
 
-	private:
+		// Apply log1p + percentile normalization to 0..1
+		void BuildNormalizedImageLocked(QImage* out) const;
+
 		mutable QMutex mu_;
-		std::vector<float> mat_;
-		int rows_{ 0 };
-		int cols_{ 0 };
-		mutable QImage cached_;
+
+		int n_mels_ = 0;
+		int n_frames_ = 0;
+		std::vector<float> frames_;  // packed
 	};
 
 }  // namespace qt_bridge

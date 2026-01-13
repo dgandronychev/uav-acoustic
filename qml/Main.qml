@@ -22,8 +22,9 @@ ApplicationWindow {
       height: 320
       fillMode: Image.Stretch
       cache: false
-      source: "image://pcen/latest"
+      source: "image://pcen/latest?f=" + telemetry.frameId
     }
+
 
     Rectangle {
       width: parent.width

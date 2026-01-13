@@ -1,8 +1,9 @@
 #pragma once
+
 #include <QObject>
 #include <QTimer>
 #include <QVariantList>
-#include <QVariantMap>
+
 #include <memory>
 
 #include "core/telemetry/telemetry_bus.h"
@@ -10,41 +11,42 @@
 
 namespace qt_bridge {
 
-class TelemetryProvider final : public QObject {
-  Q_OBJECT
+    class TelemetryProvider final : public QObject {
+        Q_OBJECT
 
-  Q_PROPERTY(double pDetectLatest READ pDetectLatest NOTIFY updated)
-  Q_PROPERTY(int fsmState READ fsmState NOTIFY updated)
-  Q_PROPERTY(QVariantList timeline READ timeline NOTIFY updated)
+            Q_PROPERTY(double pDetectLatest READ pDetectLatest NOTIFY updated)
+            Q_PROPERTY(QString fsmState READ fsmState NOTIFY updated)
+            Q_PROPERTY(QVariantList timeline READ timeline NOTIFY updated)
+            Q_PROPERTY(int frameId READ frameId NOTIFY updated)
 
- public:
-  TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
-                    PcenImageProvider* img_provider,
-                    QObject* parent = nullptr);
+    public:
+        TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
+            PcenImageProvider* pcen_provider,
+            QObject* parent = nullptr);
 
-  Q_INVOKABLE void start(int ui_fps = 12);
-  Q_INVOKABLE void stop();
+        // Called from main.cpp
+        Q_INVOKABLE void start(int fps = 12);
 
-  [[nodiscard]] double pDetectLatest() const;
-  [[nodiscard]] int fsmState() const;
-  [[nodiscard]] QVariantList timeline() const;
+        double pDetectLatest() const { return p_detect_latest_; }
+        QString fsmState() const { return fsm_state_; }
+        QVariantList timeline() const { return timeline_; }
+        int frameId() const { return frame_id_; }
 
- signals:
-  void updated();
+    signals:
+        void updated();
 
- private slots:
-  void onTick();
+    private slots:
+        void onTick();
 
- private:
-  QVariantList buildTimelineQml(const core::telemetry::TelemetrySnapshot& s) const;
-  void updateMockHeatmap();  // Step-0: пока пустая/простая
+    private:
+        std::shared_ptr<core::telemetry::TelemetryBus> bus_;
+        PcenImageProvider* pcen_provider_ = nullptr;
+        QTimer timer_;
 
-  std::shared_ptr<core::telemetry::TelemetryBus> bus_;
-  PcenImageProvider* img_provider_ = nullptr;
-  QTimer timer_;
-
-  core::telemetry::TelemetryBus::SnapshotPtr last_;
-  QVariantList timeline_;
-};
+        double p_detect_latest_ = 0.0;
+        QString fsm_state_ = "IDLE";
+        QVariantList timeline_;
+        int frame_id_ = 0;
+    };
 
 }  // namespace qt_bridge

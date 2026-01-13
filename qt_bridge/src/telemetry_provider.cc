@@ -1,95 +1,63 @@
 #include "qt_bridge/telemetry_provider.h"
 
-#include <QtGlobal>
-#include <QImage>
-#include <cmath>
+#include <algorithm>
+
+#include "core/telemetry/telemetry_snapshot.h"
 
 namespace qt_bridge {
 
-TelemetryProvider::TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
-                                     PcenImageProvider* img_provider,
-                                     QObject* parent)
-    : QObject(parent),
-      bus_(std::move(bus)),
-      img_provider_(img_provider) {
-  timer_.setTimerType(Qt::PreciseTimer);
-  connect(&timer_, &QTimer::timeout, this, &TelemetryProvider::onTick);
-}
-
-void TelemetryProvider::start(int ui_fps) {
-  if (ui_fps <= 0) ui_fps = 12;
-  const int interval_ms = qMax(1, 1000 / ui_fps);
-  timer_.start(interval_ms);
-}
-
-void TelemetryProvider::stop() {
-  timer_.stop();
-}
-
-double TelemetryProvider::pDetectLatest() const {
-  if (!last_) return 0.0;
-  return static_cast<double>(last_->p_detect_latest);
-}
-
-int TelemetryProvider::fsmState() const {
-  if (!last_) return static_cast<int>(core::telemetry::FsmState::IDLE);
-  return static_cast<int>(last_->fsm_state);
-}
-
-QVariantList TelemetryProvider::timeline() const {
-  return timeline_;
-}
-
-void TelemetryProvider::onTick() {
-  if (!bus_) return;
-
-  auto snap = bus_->Latest();
-  if (!snap) return;
-  if (snap == last_) return;
-
-  last_ = std::move(snap);
-  timeline_ = buildTimelineQml(*last_);
-
-  // Step-0: mock heatmap (позже подключим реальный PCEN ring buffer)
-  updateMockHeatmap();
-
-  emit updated();
-}
-
-QVariantList TelemetryProvider::buildTimelineQml(const core::telemetry::TelemetrySnapshot& s) const {
-  QVariantList out;
-  out.reserve(s.timeline_n);
-
-  for (int i = 0; i < s.timeline_n; ++i) {
-    const auto& p = s.timeline[static_cast<std::size_t>(i)];
-    QVariantMap m;
-    m["t_ns"] = QVariant::fromValue<qint64>(static_cast<qint64>(p.t_ns));
-    m["p"] = p.p_detect;
-    out.push_back(m);
-  }
-  return out;
-}
-
-void TelemetryProvider::updateMockHeatmap() {
-  if (!img_provider_) return;
-
-  // Простая "движущаяся" картинка, чтобы сразу было видно обновление.
-  constexpr int W = 600;
-  constexpr int H = 200;
-
-  QImage img(W, H, QImage::Format_Grayscale8);
-  if (img.isNull()) return;
-
-  const double phase = last_ ? (last_->p_detect_latest) : 0.0;
-  for (int y = 0; y < H; ++y) {
-    uchar* line = img.scanLine(y);
-    for (int x = 0; x < W; ++x) {
-      const double v = 0.5 + 0.5 * std::sin(0.03 * x + 0.08 * y + 10.0 * phase);
-      line[x] = static_cast<uchar>(std::lround(v * 255.0));
+    static QString ToQString(core::telemetry::FsmState s) {
+        using core::telemetry::FsmState;
+        switch (s) {
+        case FsmState::IDLE: return "IDLE";
+        case FsmState::CANDIDATE: return "CANDIDATE";
+        case FsmState::ACTIVE: return "ACTIVE";
+        case FsmState::COOLDOWN: return "COOLDOWN";
+        default: return "UNKNOWN";
+        }
     }
-  }
 
-  img_provider_->SetImage(img);
-}
+    TelemetryProvider::TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
+        PcenImageProvider* pcen_provider,
+        QObject* parent)
+        : QObject(parent),
+        bus_(std::move(bus)),
+        pcen_provider_(pcen_provider) {
+        connect(&timer_, &QTimer::timeout, this, &TelemetryProvider::onTick);
+    }
+
+    void TelemetryProvider::start(int fps) {
+        fps = std::clamp(fps, 1, 60);
+        timer_.start(1000 / fps);
+    }
+
+    void TelemetryProvider::onTick() {
+        // Pull latest snapshot
+        auto s = bus_ ? bus_->Latest() : nullptr;
+        if (s) {
+            p_detect_latest_ = static_cast<double>(s->p_detect_latest);
+            fsm_state_ = ToQString(s->fsm_state);
+
+            // timeline -> QVariantList of {t, p}
+            QVariantList tl;
+            tl.reserve(s->timeline_n);
+            for (int i = 0; i < s->timeline_n; ++i) {
+                const auto& pt = s->timeline[static_cast<std::size_t>(i)];
+                QVariantMap m;
+                m["t"] = static_cast<qlonglong>(pt.t_ns);
+                m["p"] = static_cast<double>(pt.p_detect);
+                tl.push_back(m);
+            }
+            timeline_ = std::move(tl);
+        }
+
+        // Update mock heatmap
+        if (pcen_provider_) {
+            pcen_provider_->UpdateMockHeatmap();
+        }
+
+        ++frame_id_;
+        emit updated();
+    }
 
 }  // namespace qt_bridge

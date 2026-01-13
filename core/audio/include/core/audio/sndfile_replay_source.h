@@ -1,47 +1,39 @@
 #pragma once
-#include <cstdint>
-#include <optional>
-#include <span>
-#include <string>
-#include <vector>
-#include <sndfile.h>
+
 #include "core/audio/i_audio_source.h"
 
-struct SF_INFO_tag;
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
 
 namespace core::audio {
 
-// Replay source based on libsndfile:
-// supports FLAC/WAV/OGG/Vorbis/... depending on build.
-// Reads float samples (normalized), outputs interleaved float chunks.
-class SndfileReplaySource final : public IAudioSource {
- public:
-  explicit SndfileReplaySource(std::string path);
-  ~SndfileReplaySource() override;
+	class SndfileReplaySource : public IAudioSource {
+	public:
+		explicit SndfileReplaySource(std::string path);
+		~SndfileReplaySource() override;
 
-  bool Open(const AudioSourceConfig& cfg) override;
-  void Close() override;
-  std::optional<AudioChunk> Read() override;
+		bool Open(const AudioSourceConfig& cfg) override;
+		void Close() override;
+		std::optional<AudioChunk> Read() override;
 
-  [[nodiscard]] int FileSampleRate() const noexcept { return file_sr_; }
-  [[nodiscard]] int FileChannels() const noexcept { return file_ch_; }
+		int file_sample_rate() const { return file_sr_; }
+		int file_channels() const { return file_ch_; }
 
- private:
-  void resetToLoopStart();
-  std::int64_t now_ns() const;
+	private:
+		std::int64_t now_ns() const;
+		void resetToLoopStart();
 
-  std::string path_;
-  AudioSourceConfig cfg_{};
+		std::string path_;
+		AudioSourceConfig cfg_{};
 
-  SNDFILE* snd_{ nullptr };
-  SF_INFO_tag* info_ = nullptr;
+		void* snd_{ nullptr };
+		int file_sr_{ 0 };
+		int file_ch_{ 0 };
 
-  int file_sr_ = 0;
-  int file_ch_ = 0;
-
-  std::int64_t t0_ns_ = 0;
-
-  std::vector<float> buf_;
-};
+		std::vector<float> buf_;
+		std::int64_t t0_ns_{ 0 };
+	};
 
 }  // namespace core::audio

@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
+project(uav_acoustic LANGUAGES CXX)
 
 # ===== Qt path (fallback) =====
 if (WIN32 AND NOT DEFINED CMAKE_PREFIX_PATH)
@@ -6,7 +7,6 @@ if (WIN32 AND NOT DEFINED CMAKE_PREFIX_PATH)
 endif()
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick)
-
 qt_standard_project_setup()
 
 # =================================================
@@ -15,7 +15,6 @@ qt_standard_project_setup()
 add_library(core_telemetry STATIC
   ${CMAKE_SOURCE_DIR}/core/telemetry/src/telemetry_bus.cc
 )
-
 target_include_directories(core_telemetry PUBLIC
   ${CMAKE_SOURCE_DIR}/core/telemetry/include
 )
@@ -29,17 +28,34 @@ if (NOT SndFile_FOUND)
   find_package(sndfile CONFIG REQUIRED)
 endif()
 
-
 add_library(core_audio STATIC
   ${CMAKE_SOURCE_DIR}/core/audio/src/sndfile_replay_source.cc
 )
-
 target_include_directories(core_audio PUBLIC
   ${CMAKE_SOURCE_DIR}/core/audio/include
 )
 
-target_link_libraries(core_audio PUBLIC SndFile::sndfile)
+if (TARGET SndFile::sndfile)
+  target_link_libraries(core_audio PUBLIC SndFile::sndfile)
+elseif (TARGET sndfile::sndfile)
+  target_link_libraries(core_audio PUBLIC sndfile::sndfile)
+else()
+  message(FATAL_ERROR "libsndfile найден, но импорт-таргет не обнаружен (SndFile::sndfile или sndfile::sndfile)")
+endif()
 target_compile_features(core_audio PUBLIC cxx_std_20)
+
+# =================================================
+# core_dsp (PCEN-mel)  [Подсистема 3]
+# =================================================
+add_library(core_dsp STATIC
+  ${CMAKE_SOURCE_DIR}/core/dsp/src/mel_filterbank.cc
+  ${CMAKE_SOURCE_DIR}/core/dsp/src/pcen_extractor.cc
+  ${CMAKE_SOURCE_DIR}/core/dsp/src/pcen_ring_buffer.cc
+)
+target_include_directories(core_dsp PUBLIC
+  ${CMAKE_SOURCE_DIR}/core/dsp/include
+)
+target_compile_features(core_dsp PUBLIC cxx_std_20)
 
 # =================================================
 # qt_bridge (MOC enabled)
@@ -61,12 +77,14 @@ target_include_directories(qt_bridge PUBLIC
   ${CMAKE_SOURCE_DIR}/qt_bridge/include
   ${CMAKE_SOURCE_DIR}/core/telemetry/include
   ${CMAKE_SOURCE_DIR}/core/audio/include
+  ${CMAKE_SOURCE_DIR}/core/dsp/include
 )
 
 target_link_libraries(qt_bridge PUBLIC
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
   core_telemetry
   core_audio
+  core_dsp
 )
 
 target_compile_features(qt_bridge PUBLIC cxx_std_20)
@@ -81,6 +99,7 @@ qt_add_executable(uav_acoustic_gui
 target_link_libraries(uav_acoustic_gui PRIVATE
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
   qt_bridge
+  core_dsp
 )
 
 # =================================================

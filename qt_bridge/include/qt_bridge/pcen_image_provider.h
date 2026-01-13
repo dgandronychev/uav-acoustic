@@ -1,30 +1,30 @@
 #pragma once
 
+#include <QQuickImageProvider>
 #include <QImage>
 #include <QMutex>
-#include <QQuickImageProvider>
+#include <vector>
 
 namespace qt_bridge {
 
-	// Mock PCEN heatmap provider: 64x128 (H x W), scrolling.
-	class PcenImageProvider final : public QQuickImageProvider {
+	class PcenImageProvider : public QQuickImageProvider {
 	public:
 		PcenImageProvider();
 
-		// QQuickImageProvider
+		// rows x cols matrix in row-major (rows=frames, cols=mels)
+		void SetPcenMatrix(std::vector<float> m, int rows, int cols);
+
 		QImage requestImage(const QString& id, QSize* size, const QSize& requestedSize) override;
 
-		// Called from UI timer thread (TelemetryProvider).
-		void UpdateMockHeatmap();
-
 	private:
-		void EnsureImageLocked();
-		QRgb ColorMap(float v) const;  // v in [0..1]
+		QImage BuildHeatmapLocked() const;
 
 	private:
 		mutable QMutex mu_;
-		QImage img_;          // Format_ARGB32, size 128x64 (W x H)
-		int step_ = 0;        // animation step
+		std::vector<float> mat_;
+		int rows_{ 0 };
+		int cols_{ 0 };
+		mutable QImage cached_;
 	};
 
 }  // namespace qt_bridge

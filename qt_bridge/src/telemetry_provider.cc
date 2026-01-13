@@ -1,63 +1,69 @@
 #include "qt_bridge/telemetry_provider.h"
+#include "qt_bridge/pcen_image_provider.h"
+
+#include <QtGlobal>
+#include <QVariantMap>
 
 #include <algorithm>
 
-#include "core/telemetry/telemetry_snapshot.h"
-
 namespace qt_bridge {
 
-    static QString ToQString(core::telemetry::FsmState s) {
-        using core::telemetry::FsmState;
-        switch (s) {
-        case FsmState::IDLE: return "IDLE";
-        case FsmState::CANDIDATE: return "CANDIDATE";
-        case FsmState::ACTIVE: return "ACTIVE";
-        case FsmState::COOLDOWN: return "COOLDOWN";
-        default: return "UNKNOWN";
-        }
+static QString FsmToString(core::telemetry::FsmState st) {
+  switch (st) {
+    case core::telemetry::FsmState::IDLE: return "IDLE";
+    case core::telemetry::FsmState::CANDIDATE: return "CANDIDATE";
+    case core::telemetry::FsmState::ACTIVE: return "ACTIVE";
+    case core::telemetry::FsmState::COOLDOWN: return "COOLDOWN";
+    default: return "UNKNOWN";
+  }
+}
+
+TelemetryProvider::TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
+                                     std::shared_ptr<core::dsp::PcenRingBuffer> pcen_rb,
+                                     PcenImageProvider* img_provider,
+                                     QObject* parent)
+    : QObject(parent),
+      bus_(std::move(bus)),
+      pcen_rb_(std::move(pcen_rb)),
+      img_provider_(img_provider) {
+  connect(&timer_, &QTimer::timeout, this, &TelemetryProvider::OnTick);
+}
+
+void TelemetryProvider::Start(int fps) {
+  if (fps <= 0) fps = 12;
+  timer_.start(1000 / fps);
+}
+
+void TelemetryProvider::OnTick() {
+  auto snap = bus_->Latest();
+  if (snap) {
+    p_detect_ = snap->p_detect_latest;
+    fsm_state_ = FsmToString(snap->fsm_state);
+
+    // timeline
+    QVariantList tl;
+    tl.reserve(snap->timeline_n);
+    for (int i = 0; i < snap->timeline_n; ++i) {
+      QVariantMap p;
+      p["t"] = static_cast<qint64>(snap->timeline[static_cast<std::size_t>(i)].t_ns);
+      p["p"] = snap->timeline[static_cast<std::size_t>(i)].p_detect;
+      tl.push_back(p);
     }
+    timeline_ = std::move(tl);
+  }
 
-    TelemetryProvider::TelemetryProvider(std::shared_ptr<core::telemetry::TelemetryBus> bus,
-        PcenImageProvider* pcen_provider,
-        QObject* parent)
-        : QObject(parent),
-        bus_(std::move(bus)),
-        pcen_provider_(pcen_provider) {
-        connect(&timer_, &QTimer::timeout, this, &TelemetryProvider::onTick);
+  // --- PCEN heatmap from ring buffer ---
+  // We render exactly 128 time columns to match UI expectation.
+  if (pcen_rb_ && img_provider_) {
+    int got = 0;
+    auto mat = pcen_rb_->SnapshotLast(128, &got);  // got x mels
+    if (got > 0) {
+      img_provider_->SetPcenMatrix(std::move(mat), got, pcen_rb_->n_mels());
+      frame_id_++;  // forces QML image refresh via query param
     }
+  }
 
-    void TelemetryProvider::start(int fps) {
-        fps = std::clamp(fps, 1, 60);
-        timer_.start(1000 / fps);
-    }
-
-    void TelemetryProvider::onTick() {
-        // Pull latest snapshot
-        auto s = bus_ ? bus_->Latest() : nullptr;
-        if (s) {
-            p_detect_latest_ = static_cast<double>(s->p_detect_latest);
-            fsm_state_ = ToQString(s->fsm_state);
-
-            // timeline -> QVariantList of {t, p}
-            QVariantList tl;
-            tl.reserve(s->timeline_n);
-            for (int i = 0; i < s->timeline_n; ++i) {
-                const auto& pt = s->timeline[static_cast<std::size_t>(i)];
-                QVariantMap m;
-                m["t"] = static_cast<qlonglong>(pt.t_ns);
-                m["p"] = static_cast<double>(pt.p_detect);
-                tl.push_back(m);
-            }
-            timeline_ = std::move(tl);
-        }
-
-        // Update mock heatmap
-        if (pcen_provider_) {
-            pcen_provider_->UpdateMockHeatmap();
-        }
-
-        ++frame_id_;
-        emit updated();
-    }
+  emit updated();
+}
 
 }  // namespace qt_bridge

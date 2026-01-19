@@ -11,6 +11,7 @@
 #include <vector>
 #include <deque>
 #include <iostream>
+#include <filesystem>
 
 #include "core/telemetry/telemetry_bus.h"
 #include "core/telemetry/telemetry_snapshot.h"
@@ -22,8 +23,6 @@
 #include "core/dsp/pcen_ring_buffer.h"
 
 #include "core/detect/mock_detector.h"
-
-// NEW:
 #include "core/segment/segment_builder.h"
 
 #include "qt_bridge/telemetry_provider.h"
@@ -88,6 +87,14 @@ int main(int argc, char* argv[]) {
     scfg.max_event_ms = 12000;  // защита
     scfg.out_dir = "segments";
 
+    // Ќа вс€кий случай создадим директорию
+    try {
+        std::filesystem::create_directories(scfg.out_dir);
+    }
+    catch (...) {
+        // не фатально
+    }
+
     core::segment::SegmentBuilder segment_builder(pcen_rb, scfg);
 
     QQmlApplicationEngine engine;
@@ -101,9 +108,10 @@ int main(int argc, char* argv[]) {
 
     std::atomic<bool> running{ true };
 
+    // ---- Audio replay + PCEN + detector thread ----
     std::thread audio_thread([&] {
         std::string path =
-            "C:/Users/Owner/_pish/II_Project/II_Project/datasets/uav_audio/raw/Mavik_3T/flight_026.flac";
+            "C:/Users/Owner/_pish/test_orig.flac";
 
         core::audio::AudioSourceConfig acfg;
         acfg.sample_rate = 16000;
@@ -124,6 +132,9 @@ int main(int argc, char* argv[]) {
         std::deque<float> p_hist;
         const int kHistN = 64;
 
+        const std::int64_t hop_ns = static_cast<std::int64_t>(pcfg.hop_length) * 1'000'000'000LL / pcfg.sample_rate;
+        const int dt_ms = acfg.chunk_ms;
+
         while (running.load()) {
             auto chunk = src.Read();
             if (!chunk) {
@@ -134,6 +145,7 @@ int main(int argc, char* argv[]) {
             const int frames = chunk->frames;
             const int ch = chunk->channels;
 
+            // Interleaved float -> mono
             std::vector<float> mono(static_cast<std::size_t>(frames), 0.0f);
             const float* inter = chunk->interleaved.data();
 
@@ -148,22 +160,28 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // PCEN -> ring buffer
+            // --- PCEN -> ring buffer ---
             pcen_frames.clear();
             const int produced = pcen.Process(mono.data(), frames, &pcen_frames);
             if (produced > 0) {
                 const int mels = pcen.n_mels();
+                // Ѕаза времени дл€ PCEN-фреймов: берем t0 чанка
+                // (AudioChunk::t0_ns выставл€етс€ в источнике)
+                const std::int64_t base_ns = chunk->t0_ns;
+
                 for (int i = 0; i < produced; ++i) {
-                    pcen_rb->PushFrame(&pcen_frames[static_cast<std::size_t>(i * mels)]);
-                    segment_builder.OnFramePushed(now_ns()); // after push
+                    const float* frame_ptr = &pcen_frames[static_cast<std::size_t>(i * mels)];
+                    pcen_rb->PushFrame(frame_ptr);
+
+                    const std::int64_t frame_t_ns = base_ns + hop_ns * i;
+                    segment_builder.OnFramePushed(frame_t_ns);
                 }
             }
 
-            // p_detect
+            // --- p_detect ---
             const float p = det.Process(mono.data(), frames);
 
-            // FSM update
-            const int dt_ms = acfg.chunk_ms;
+            // --- FSM update ---
             bool event_started = false;
             bool event_ended = false;
 
@@ -226,7 +244,6 @@ int main(int argc, char* argv[]) {
 
                 case core::telemetry::FsmState::COOLDOWN:
                 default:
-                    // handled above
                     break;
                 }
             }
@@ -255,16 +272,16 @@ int main(int argc, char* argv[]) {
             s->p_detect_latest = p;
             s->fsm_state = fsm;
 
-            // If you already added these fields:
+            // Ёти пол€ должны быть добавлены в TelemetrySnapshot
             s->event_started = event_started;
             s->event_ended = event_ended;
 
             s->timeline_n = static_cast<int>(p_hist.size());
             const std::int64_t step_ns = static_cast<std::int64_t>(acfg.chunk_ms) * 1'000'000LL;
-            const std::int64_t base = s->t_ns - step_ns * static_cast<std::int64_t>(s->timeline_n);
+            const std::int64_t base_plot = s->t_ns - step_ns * static_cast<std::int64_t>(s->timeline_n);
 
             for (int i = 0; i < s->timeline_n; ++i) {
-                s->timeline[static_cast<std::size_t>(i)].t_ns = base + step_ns * i;
+                s->timeline[static_cast<std::size_t>(i)].t_ns = base_plot + step_ns * i;
                 s->timeline[static_cast<std::size_t>(i)].p_detect = p_hist[static_cast<std::size_t>(i)];
             }
 

@@ -22,7 +22,7 @@
 #include "core/dsp/pcen_extractor.h"
 #include "core/dsp/pcen_ring_buffer.h"
 
-#include "core/detect/mock_detector.h"
+#include "core/tflite/tcn_detector.h"
 #include "core/segment/segment_builder.h"
 
 #include "qt_bridge/telemetry_provider.h"
@@ -40,31 +40,41 @@ int main(int argc, char* argv[]) {
 
     // --- PCEN ring buffer (for UI heatmap) ---
     auto pcen_rb = std::make_shared<core::dsp::PcenRingBuffer>(
-        /*n_mels=*/64,
+        /*n_mels=*/128,
         /*capacity_frames=*/1500  // ~15s if hop ~10ms
     );
 
     core::dsp::PcenConfig pcfg;
-    pcfg.sample_rate = 16000;
-    pcfg.n_fft = 512;
-    pcfg.win_length = 400;
-    pcfg.hop_length = 160;  // 10ms at 16k
-    pcfg.n_mels = 64;
+    pcfg.sample_rate = 22050;
+    pcfg.n_fft = 1024;
+    pcfg.win_length = 1024;
+    pcfg.hop_length = 256;
+    pcfg.n_mels = 128;
+    // PCEN from config_train.json
+    pcfg.alpha = 0.6f;   // gain
+    pcfg.delta = 2.0f;   // bias
+    pcfg.r = 0.1f;       // power
+    pcfg.eps = 1e-6f;
+    // time_constant -> smoothing s
+    // s = 1 - exp(-hop / (sr * time_constant))
+    {
+        const float time_constant = 0.4f;
+        const float hop_sec = static_cast<float>(pcfg.hop_length) / static_cast<float>(pcfg.sample_rate);
+        pcfg.s = 1.0f - std::exp(-hop_sec / time_constant);
+    }
     core::dsp::PcenExtractor pcen(pcfg);
 
-    // --- Mock VAD detector ---
-    core::detect::MockDetector::Config dcfg;
-    dcfg.sample_rate = 16000;
-    dcfg.frame_ms = 20;
-    dcfg.norm_alpha = 0.01f;
-    dcfg.p_ema_alpha = 0.20f;
-    dcfg.sigmoid_k = 1.2f;
-    dcfg.sigmoid_bias = 0.0f;
-    dcfg.p_on = 0.65f;
-    dcfg.p_off = 0.45f;
-    dcfg.t_confirm_ms = 200;
-    dcfg.t_release_ms = 300;
-    core::detect::MockDetector det(dcfg);
+    // --- TCN detector (dynamic float32) ---
+    core::tflite::TcnDetector::Config tcfg;
+    core::tflite::TcnDetector tcn(pcen_rb, tcfg);
+
+    tcfg.n_mels = 128;
+    tcfg.n_frames = 169;
+    tcfg.step_ms = 250;
+    tcfg.num_threads = 2;
+    // Paths: adjust to your layout
+    tcn.LoadModel("model_dynamic.tflite");
+    tcn.LoadClassNames("class_names.txt");
 
     // --- FSM (подсистема 5) параметры ---
     const float p_on = 0.65f;
@@ -114,7 +124,7 @@ int main(int argc, char* argv[]) {
             "C:/Users/Owner/_pish/test_orig.flac";
 
         core::audio::AudioSourceConfig acfg;
-        acfg.sample_rate = 16000;
+        acfg.sample_rate = 22050;
         acfg.channels = 1;
         acfg.chunk_ms = 20;
         acfg.realtime = true;
@@ -127,7 +137,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::vector<float> pcen_frames;
-        pcen_frames.reserve(64 * 32);
+        pcen_frames.reserve(128 * 32);
 
         std::deque<float> p_hist;
         const int kHistN = 64;
@@ -178,8 +188,9 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // --- p_detect ---
-            const float p = det.Process(mono.data(), frames);
+            // Run TCN inference periodically
+            tcn.Tick(acfg.chunk_ms);
+            const float p = tcn.p_detect();
 
             // --- FSM update ---
             bool event_started = false;

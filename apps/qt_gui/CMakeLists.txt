@@ -5,8 +5,15 @@ if (WIN32 AND NOT DEFINED CMAKE_PREFIX_PATH)
   set(CMAKE_PREFIX_PATH "C:/Qt/6.9.1/msvc2022_64")
 endif()
 
+project(uav_acoustic LANGUAGES CXX)
+
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick)
 qt_standard_project_setup()
+
+# =================================================
+# Build accelerators
+# =================================================
+option(UAV_UNITY "Enable unity builds for core libs" ON)
 
 # =================================================
 # core_telemetry
@@ -14,7 +21,6 @@ qt_standard_project_setup()
 add_library(core_telemetry STATIC
   ${CMAKE_SOURCE_DIR}/core/telemetry/src/telemetry_bus.cc
 )
-
 target_include_directories(core_telemetry PUBLIC
   ${CMAKE_SOURCE_DIR}/core/telemetry/include
 )
@@ -31,7 +37,6 @@ endif()
 add_library(core_audio STATIC
   ${CMAKE_SOURCE_DIR}/core/audio/src/sndfile_replay_source.cc
 )
-
 target_include_directories(core_audio PUBLIC
   ${CMAKE_SOURCE_DIR}/core/audio/include
 )
@@ -54,47 +59,31 @@ add_library(core_dsp STATIC
   ${CMAKE_SOURCE_DIR}/core/dsp/src/pcen_extractor.cc
   ${CMAKE_SOURCE_DIR}/core/dsp/src/pcen_ring_buffer.cc
 )
-
 target_include_directories(core_dsp PUBLIC
   ${CMAKE_SOURCE_DIR}/core/dsp/include
 )
-
 target_compile_features(core_dsp PUBLIC cxx_std_20)
 
 # =================================================
-# core_detect (Step 4A mock detector)
+# core_detect (mock detector)
 # =================================================
 add_library(core_detect STATIC
   ${CMAKE_SOURCE_DIR}/core/detect/src/mock_detector.cc
 )
-
 target_include_directories(core_detect PUBLIC
   ${CMAKE_SOURCE_DIR}/core/detect/include
 )
-
 target_compile_features(core_detect PUBLIC cxx_std_20)
 
 # =================================================
-# core_logic (FSM)  
-# =================================================
-add_library(core_logic STATIC
-  ${CMAKE_SOURCE_DIR}/core/logic/src/fsm.cc
-)
-
-target_include_directories(core_logic PUBLIC
-  ${CMAKE_SOURCE_DIR}/core/logic/include
-  ${CMAKE_SOURCE_DIR}/core/telemetry/include
-)
-
-target_compile_features(core_logic PUBLIC cxx_std_20)
-# =================================================
-# core_fsm 
+# core_fsm (Event FSM)
 # =================================================
 add_library(core_fsm STATIC
   ${CMAKE_SOURCE_DIR}/core/fsm/src/event_fsm.cc
 )
 target_include_directories(core_fsm PUBLIC
   ${CMAKE_SOURCE_DIR}/core/fsm/include
+  ${CMAKE_SOURCE_DIR}/core/telemetry/include
 )
 target_link_libraries(core_fsm PUBLIC core_telemetry)
 target_compile_features(core_fsm PUBLIC cxx_std_20)
@@ -105,13 +94,63 @@ target_compile_features(core_fsm PUBLIC cxx_std_20)
 add_library(core_segment STATIC
   ${CMAKE_SOURCE_DIR}/core/segment/src/segment_builder.cc
 )
-
 target_include_directories(core_segment PUBLIC
   ${CMAKE_SOURCE_DIR}/core/segment/include
   ${CMAKE_SOURCE_DIR}/core/dsp/include
 )
-
 target_compile_features(core_segment PUBLIC cxx_std_20)
+
+# =================================================
+# TensorFlow Lite (optional)
+# - If provided by Conan: expects target tensorflow::tensorflowlite
+# - If not found: we build without core_tflite
+# =================================================
+option(UAV_ENABLE_TFLITE "Enable TensorFlow Lite integration" ON)
+
+set(UAV_HAVE_TFLITE OFF)
+
+if (UAV_ENABLE_TFLITE)
+  find_package(tensorflowlite CONFIG QUIET)
+
+  if (TARGET tensorflow::tensorflowlite)
+    set(UAV_HAVE_TFLITE ON)
+  else()
+    message(WARNING
+      "TensorFlow Lite not found (tensorflowliteConfig.cmake). "
+      "core_tflite будет отключён. "
+      "Если нужен TFLite — подключите Conan toolchain/пакет, который экспортирует tensorflow::tensorflowlite."
+    )
+  endif()
+endif()
+
+# =================================================
+# core_tflite (runner + TCN detector) [optional]
+# =================================================
+if (UAV_HAVE_TFLITE)
+  set(TCN_DETECTOR_SRC ${CMAKE_SOURCE_DIR}/core/tflite/src/tcn_detector.cc)
+
+  set(CORE_TFLITE_SOURCES
+    ${CMAKE_SOURCE_DIR}/core/tflite/src/tflite_runner.cc
+  )
+
+  if (EXISTS ${TCN_DETECTOR_SRC})
+    list(APPEND CORE_TFLITE_SOURCES ${TCN_DETECTOR_SRC})
+  endif()
+
+  add_library(core_tflite STATIC
+    ${CORE_TFLITE_SOURCES}
+  )
+
+  target_include_directories(core_tflite PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/tflite/include
+  )
+
+  target_link_libraries(core_tflite PUBLIC
+    tensorflow::tensorflowlite
+  )
+
+  target_compile_features(core_tflite PUBLIC cxx_std_20)
+endif()
 
 # =================================================
 # qt_bridge
@@ -125,8 +164,8 @@ add_library(qt_bridge STATIC
 
 set_target_properties(qt_bridge PROPERTIES
   AUTOMOC ON
-  AUTOUIC ON
-  AUTORCC ON
+  AUTOUIC OFF
+  AUTORCC OFF
 )
 
 target_include_directories(qt_bridge PUBLIC
@@ -135,7 +174,15 @@ target_include_directories(qt_bridge PUBLIC
   ${CMAKE_SOURCE_DIR}/core/audio/include
   ${CMAKE_SOURCE_DIR}/core/dsp/include
   ${CMAKE_SOURCE_DIR}/core/detect/include
+  ${CMAKE_SOURCE_DIR}/core/fsm/include
+  ${CMAKE_SOURCE_DIR}/core/segment/include
 )
+
+if (UAV_HAVE_TFLITE)
+  target_include_directories(qt_bridge PUBLIC
+    ${CMAKE_SOURCE_DIR}/core/tflite/include
+  )
+endif()
 
 target_link_libraries(qt_bridge PUBLIC
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
@@ -143,12 +190,27 @@ target_link_libraries(qt_bridge PUBLIC
   core_audio
   core_dsp
   core_detect
-  core_logic
   core_fsm
   core_segment
 )
 
+if (UAV_HAVE_TFLITE)
+  target_link_libraries(qt_bridge PUBLIC core_tflite)
+endif()
+
 target_compile_features(qt_bridge PUBLIC cxx_std_20)
+
+# =================================================
+# Unity build (optional)
+# =================================================
+if (UAV_UNITY)
+  set_target_properties(core_telemetry core_audio core_dsp core_detect core_fsm core_segment
+    PROPERTIES UNITY_BUILD ON
+  )
+  if (TARGET core_tflite)
+    set_target_properties(core_tflite PROPERTIES UNITY_BUILD ON)
+  endif()
+endif()
 
 # =================================================
 # App
@@ -157,10 +219,19 @@ qt_add_executable(uav_acoustic_gui
   src/main.cpp
 )
 
+target_include_directories(uav_acoustic_gui PRIVATE
+  ${CMAKE_SOURCE_DIR}/core/tflite/include
+)
+
 target_link_libraries(uav_acoustic_gui PRIVATE
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
   qt_bridge
 )
+
+target_include_directories(uav_acoustic_gui PRIVATE
+  ${CMAKE_SOURCE_DIR}/core/tflite/include
+)
+
 
 # =================================================
 # QML resources

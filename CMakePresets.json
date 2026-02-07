@@ -1,16 +1,20 @@
 {
-  "version": 3,
+  "version": 6,
   "configurePresets": [
     {
-      "name": "VS-Debug-vcpkg",
-      "displayName": "VS Debug (vcpkg)",
-      "generator": "Visual Studio 18 2026",
-      "binaryDir": "${sourceDir}/out/build/vs-debug-vcpkg",
-      "architecture": "x64",
+      "name": "ninja-debug-vcpkg",
+      "displayName": "Ninja Debug (vcpkg)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/ninja-debug-vcpkg",
       "cacheVariables": {
-        "CMAKE_PREFIX_PATH": "C:/Qt/6.9.1/msvc2022_64",
+        "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.9.1/msvc2022_64",
+        "UAV_ENABLE_TFLITE": "OFF",
+        "UAV_UNITY": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
       }
     },
     {
@@ -26,9 +30,16 @@
       }
     }
   ],
+  "buildPresets": [
+    {
+      "name": "ninja-debug-vcpkg",
+      "configurePreset": "ninja-debug-vcpkg",
+      "jobs": 16
+    }
+  ],
   "vendor": {
     "qt-project.org/Presets": {
-      "checksum": "aYGHP2w1BPoorWAxEe+3iT+5xYA="
+      "checksum": "OZtkruj3bjM0QfoCTDybazl0tSE="
     }
   }
 }

@@ -1,0 +1,10 @@
+[requires]
+tensorflow-lite/2.15.0
+libsndfile/1.2.2
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[layout]
+cmake_layout

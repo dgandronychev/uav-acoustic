@@ -27,11 +27,23 @@ target_include_directories(core_telemetry PUBLIC
 target_compile_features(core_telemetry PUBLIC cxx_std_20)
 
 # =================================================
-# core_audio (libsndfile via vcpkg)
+# core_audio (libsndfile)
+# - сначала ищем стандартный config-пакет
+# - если не найден, пробуем типичную локальную раскладку vcpkg_installed
 # =================================================
 find_package(SndFile CONFIG QUIET)
 if (NOT SndFile_FOUND)
-  find_package(sndfile CONFIG REQUIRED)
+  if (NOT DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET x64-windows)
+  endif()
+
+  set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+
+  if (EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/SndFileConfig.cmake")
+    list(PREPEND CMAKE_PREFIX_PATH "${_UAV_LOCAL_VCPKG_ROOT}")
+  endif()
+
+  find_package(SndFile CONFIG REQUIRED)
 endif()
 
 add_library(core_audio STATIC
@@ -245,3 +257,62 @@ qt_add_resources(uav_acoustic_gui qml_resources
 )
 
 set_target_properties(uav_acoustic_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+
+# =================================================
+# Windows runtime deployment
+# =================================================
+if (WIN32)
+  # 1) Базовый деплой runtime DLL, которые CMake умеет вывести по графу линковки.
+  add_custom_command(TARGET uav_acoustic_gui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:uav_acoustic_gui>
+      $<TARGET_FILE_DIR:uav_acoustic_gui>
+    COMMAND_EXPAND_LISTS
+  )
+
+  # 2) Деплой Qt-плагинов (platforms/qwindows[d].dll и т.п.), иначе Qt GUI не стартует.
+  get_target_property(_UAV_QMAKE_EXE Qt6::qmake IMPORTED_LOCATION)
+  if (_UAV_QMAKE_EXE)
+    get_filename_component(_UAV_QT_BIN_DIR "${_UAV_QMAKE_EXE}" DIRECTORY)
+    set(_UAV_WINDEPLOYQT "${_UAV_QT_BIN_DIR}/windeployqt.exe")
+
+    if (EXISTS "${_UAV_WINDEPLOYQT}")
+      add_custom_command(TARGET uav_acoustic_gui POST_BUILD
+        COMMAND "${_UAV_WINDEPLOYQT}"
+          --qmldir "${CMAKE_SOURCE_DIR}/qml"
+          "$<TARGET_FILE:uav_acoustic_gui>"
+      )
+    else()
+      message(WARNING "windeployqt.exe не найден рядом с qmake: ${_UAV_WINDEPLOYQT}")
+    endif()
+  endif()
+
+  # 3) Подтягиваем полное vcpkg runtime-окружение (bin/debug/bin),
+  #    чтобы не ловить каскад отсутствующих транзитивных DLL.
+  if (NOT DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET x64-windows)
+  endif()
+
+  set(_UAV_LOCAL_VCPKG_BIN "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+  set(_UAV_LOCAL_VCPKG_DEBUG_BIN "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
+
+  if (EXISTS "${_UAV_LOCAL_VCPKG_BIN}")
+    add_custom_command(TARGET uav_acoustic_gui POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${_UAV_LOCAL_VCPKG_BIN}"
+        "$<TARGET_FILE_DIR:uav_acoustic_gui>"
+      VERBATIM
+      COMMENT "Copy full release runtime DLL set from local vcpkg"
+    )
+  endif()
+
+  if (EXISTS "${_UAV_LOCAL_VCPKG_DEBUG_BIN}")
+    add_custom_command(TARGET uav_acoustic_gui POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${_UAV_LOCAL_VCPKG_DEBUG_BIN}"
+        "$<TARGET_FILE_DIR:uav_acoustic_gui>"
+      VERBATIM
+      COMMENT "Copy full debug runtime DLL set from local vcpkg"
+    )
+  endif()
+endif()

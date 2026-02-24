@@ -37,22 +37,54 @@ target_compile_features(core_telemetry PUBLIC cxx_std_20)
 
 # =================================================
 # core_audio (libsndfile)
-# - сначала ищем стандартный config-пакет
-# - если не найден, пробуем типичную локальную раскладку vcpkg_installed
+# - сначала ищем config-пакет
+# - если он недоступен/битый, используем локальный fallback из vcpkg_installed
 # =================================================
+if (NOT DEFINED VCPKG_TARGET_TRIPLET)
+  set(VCPKG_TARGET_TRIPLET x64-windows)
+endif()
+
+set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+if (EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/SndFileConfig.cmake")
+  list(PREPEND CMAKE_PREFIX_PATH "${_UAV_LOCAL_VCPKG_ROOT}")
+endif()
+
+set(_UAV_SNDFILE_TARGET "")
 find_package(SndFile CONFIG QUIET)
-if (NOT SndFile_FOUND)
-  if (NOT DEFINED VCPKG_TARGET_TRIPLET)
-    set(VCPKG_TARGET_TRIPLET x64-windows)
+if (TARGET SndFile::sndfile)
+  set(_UAV_SNDFILE_TARGET SndFile::sndfile)
+elseif (TARGET sndfile::sndfile)
+  set(_UAV_SNDFILE_TARGET sndfile::sndfile)
+else()
+  find_library(_UAV_SNDFILE_RELEASE_LIB
+    NAMES sndfile libsndfile
+    PATHS "${_UAV_LOCAL_VCPKG_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+  find_path(_UAV_SNDFILE_INCLUDE_DIR
+    NAMES sndfile.h
+    PATHS "${_UAV_LOCAL_VCPKG_ROOT}/include"
+    NO_DEFAULT_PATH
+  )
+
+  if (_UAV_SNDFILE_RELEASE_LIB AND _UAV_SNDFILE_INCLUDE_DIR)
+    add_library(UAV::sndfile UNKNOWN IMPORTED)
+    set_target_properties(UAV::sndfile PROPERTIES
+      IMPORTED_LOCATION "${_UAV_SNDFILE_RELEASE_LIB}"
+      INTERFACE_INCLUDE_DIRECTORIES "${_UAV_SNDFILE_INCLUDE_DIR}"
+      MAP_IMPORTED_CONFIG_DEBUG Release
+      MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release
+      MAP_IMPORTED_CONFIG_MINSIZEREL Release
+    )
+    set(_UAV_SNDFILE_TARGET UAV::sndfile)
+    message(WARNING
+      "SndFile config package is unavailable or broken; using fallback library: ${_UAV_SNDFILE_RELEASE_LIB}")
+  else()
+    message(FATAL_ERROR
+      "libsndfile не найден. Проверены config package и fallback пути: "
+      "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile, ${_UAV_LOCAL_VCPKG_ROOT}/lib, ${_UAV_LOCAL_VCPKG_ROOT}/include"
+    )
   endif()
-
-  set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
-
-  if (EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/SndFileConfig.cmake")
-    list(PREPEND CMAKE_PREFIX_PATH "${_UAV_LOCAL_VCPKG_ROOT}")
-  endif()
-
-  find_package(SndFile CONFIG REQUIRED)
 endif()
 
 function(_uav_fix_missing_sndfile_debug_import target_name)
@@ -94,16 +126,7 @@ target_include_directories(core_audio PUBLIC
   ${CMAKE_SOURCE_DIR}/core/audio/include
 )
 
-if (TARGET SndFile::sndfile)
-  _uav_fix_missing_sndfile_debug_import(SndFile::sndfile)
-  target_link_libraries(core_audio PUBLIC SndFile::sndfile)
-elseif (TARGET sndfile::sndfile)
-  _uav_fix_missing_sndfile_debug_import(sndfile::sndfile)
-  target_link_libraries(core_audio PUBLIC sndfile::sndfile)
-else()
-  message(FATAL_ERROR "libsndfile найден, но импорт-таргет не обнаружен (ожидали SndFile::sndfile или sndfile::sndfile)")
-endif()
-
+target_link_libraries(core_audio PUBLIC ${_UAV_SNDFILE_TARGET})
 target_compile_features(core_audio PUBLIC cxx_std_20)
 
 # =================================================

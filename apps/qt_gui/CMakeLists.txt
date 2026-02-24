@@ -5,10 +5,19 @@ if (WIN32 AND NOT DEFINED CMAKE_PREFIX_PATH)
   set(CMAKE_PREFIX_PATH "C:/Qt/6.9.1/msvc2022_64")
 endif()
 
-project(uav_acoustic LANGUAGES CXX)
+# NOTE:
+# Keep this as a subdirectory CMake file (no nested project()) so IDE auto-setup
+# hooks are not re-run twice and to simplify cross-platform configuration.
 
-find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Qml Quick)
-qt_standard_project_setup()
+# Prefer Qt6, but allow Qt5 fallback for embedded Linux kits (e.g. RK3588).
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Qml Quick)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Qml Quick)
+
+if (QT_VERSION_MAJOR EQUAL 6)
+  if (COMMAND qt_standard_project_setup)
+    qt_standard_project_setup()
+  endif()
+endif()
 
 # =================================================
 # Build accelerators
@@ -197,7 +206,7 @@ if (UAV_HAVE_TFLITE)
 endif()
 
 target_link_libraries(qt_bridge PUBLIC
-  Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
   core_telemetry
   core_audio
   core_dsp
@@ -227,16 +236,22 @@ endif()
 # =================================================
 # App
 # =================================================
-qt_add_executable(uav_acoustic_gui
-  src/main.cpp
-)
+if (QT_VERSION_MAJOR EQUAL 6)
+  qt_add_executable(uav_acoustic_gui
+    src/main.cpp
+  )
+else()
+  add_executable(uav_acoustic_gui
+    src/main.cpp
+  )
+endif()
 
 #target_include_directories(uav_acoustic_gui PRIVATE
 #  ${CMAKE_SOURCE_DIR}/core/tflite/include
 #)
 
 target_link_libraries(uav_acoustic_gui PRIVATE
-  Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
   qt_bridge
 )
 
@@ -251,10 +266,15 @@ target_link_libraries(uav_acoustic_gui PRIVATE
 set(QML_MAIN ${CMAKE_SOURCE_DIR}/qml/Main.qml)
 set_source_files_properties(${QML_MAIN} PROPERTIES QT_RESOURCE_ALIAS "Main.qml")
 
-qt_add_resources(uav_acoustic_gui qml_resources
-  PREFIX "/"
-  FILES ${QML_MAIN}
-)
+if (QT_VERSION_MAJOR EQUAL 6)
+  qt_add_resources(uav_acoustic_gui qml_resources
+    PREFIX "/"
+    FILES ${QML_MAIN}
+  )
+else()
+  qt5_add_resources(UAV_QML_RCC ${QML_MAIN})
+  target_sources(uav_acoustic_gui PRIVATE ${UAV_QML_RCC})
+endif()
 
 set_target_properties(uav_acoustic_gui PROPERTIES WIN32_EXECUTABLE TRUE)
 
@@ -271,7 +291,7 @@ if (WIN32)
   )
 
   # 2) Деплой Qt-плагинов (platforms/qwindows[d].dll и т.п.), иначе Qt GUI не стартует.
-  get_target_property(_UAV_QMAKE_EXE Qt6::qmake IMPORTED_LOCATION)
+    get_target_property(_UAV_QMAKE_EXE Qt${QT_VERSION_MAJOR}::qmake IMPORTED_LOCATION)
   if (_UAV_QMAKE_EXE)
     get_filename_component(_UAV_QT_BIN_DIR "${_UAV_QMAKE_EXE}" DIRECTORY)
     set(_UAV_WINDEPLOYQT "${_UAV_QT_BIN_DIR}/windeployqt.exe")

@@ -22,7 +22,7 @@
 #include "core/dsp/pcen_extractor.h"
 #include "core/dsp/pcen_ring_buffer.h"
 
-#include "core/tflite/tcn_detector.h"
+#include "core/detect/mock_detector.h"
 #include "core/segment/segment_builder.h"
 
 #include "qt_bridge/telemetry_provider.h"
@@ -65,16 +65,22 @@ int main(int argc, char* argv[]) {
     core::dsp::PcenExtractor pcen(pcfg);
 
     // --- TCN detector (dynamic float32) ---
-    core::tflite::TcnDetector::Config tcfg;
-    core::tflite::TcnDetector tcn(pcen_rb, tcfg);
+    //core::tflite::TcnDetector::Config tcfg;
+    //core::tflite::TcnDetector tcn(pcen_rb, tcfg);
 
-    tcfg.n_mels = 128;
-    tcfg.n_frames = 169;
-    tcfg.step_ms = 250;
-    tcfg.num_threads = 2;
+    //tcfg.n_mels = 128;
+    //tcfg.n_frames = 169;
+    //tcfg.step_ms = 250;
+    //tcfg.num_threads = 2;
     // Paths: adjust to your layout
-    tcn.LoadModel("model_dynamic.tflite");
-    tcn.LoadClassNames("class_names.txt");
+    //tcn.LoadModel("model_dynamic.tflite");
+    //tcn.LoadClassNames("class_names.txt");
+
+    // --- Mock detector (without TFLite dependency) ---
+    core::detect::MockDetector::Config dcfg;
+    dcfg.sample_rate = pcfg.sample_rate;
+    dcfg.frame_ms = 20;
+    core::detect::MockDetector detector(dcfg);
 
     // --- FSM (подсистема 5) параметры ---
     const float p_on = 0.65f;
@@ -189,8 +195,9 @@ int main(int argc, char* argv[]) {
             }
 
             // Run TCN inference periodically
-            tcn.Tick(acfg.chunk_ms);
-            const float p = tcn.p_detect();
+            //tcn.Tick(acfg.chunk_ms);
+            //const float p = tcn.p_detect();
+            const float p = detector.Process(mono.data(), frames);
 
             // --- FSM update ---
             bool event_started = false;

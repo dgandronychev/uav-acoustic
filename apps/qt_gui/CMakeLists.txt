@@ -105,7 +105,7 @@ target_compile_features(core_segment PUBLIC cxx_std_20)
 # - If provided by Conan: expects target tensorflow::tensorflowlite
 # - If not found: we build without core_tflite
 # =================================================
-option(UAV_ENABLE_TFLITE "Enable TensorFlow Lite integration" ON)
+option(UAV_ENABLE_TFLITE "Enable TensorFlow Lite integration" OFF)
 
 set(UAV_HAVE_TFLITE OFF)
 
@@ -219,18 +219,18 @@ qt_add_executable(uav_acoustic_gui
   src/main.cpp
 )
 
-target_include_directories(uav_acoustic_gui PRIVATE
-  ${CMAKE_SOURCE_DIR}/core/tflite/include
-)
+#target_include_directories(uav_acoustic_gui PRIVATE
+#  ${CMAKE_SOURCE_DIR}/core/tflite/include
+#)
 
 target_link_libraries(uav_acoustic_gui PRIVATE
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick
   qt_bridge
 )
 
-target_include_directories(uav_acoustic_gui PRIVATE
-  ${CMAKE_SOURCE_DIR}/core/tflite/include
-)
+#target_include_directories(uav_acoustic_gui PRIVATE
+#  ${CMAKE_SOURCE_DIR}/core/tflite/include
+#)
 
 
 # =================================================

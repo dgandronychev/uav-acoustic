@@ -8,3 +8,6 @@ CMakeToolchain
 
 [layout]
 cmake_layout
+
+[options]
+libsndfile/*:with_mpeg=False

@@ -55,6 +55,38 @@ if (NOT SndFile_FOUND)
   find_package(SndFile CONFIG REQUIRED)
 endif()
 
+function(_uav_fix_missing_sndfile_debug_import target_name)
+  if (NOT TARGET ${target_name})
+    return()
+  endif()
+
+  # Some local vcpkg installs provide only release artifacts for libsndfile.
+  # In that case CMake may fail during configure because IMPORTED_*_DEBUG points
+  # to a non-existent file. Reuse release binary for Debug-like configs.
+  get_target_property(_snd_dbg_implib ${target_name} IMPORTED_IMPLIB_DEBUG)
+  get_target_property(_snd_rel_implib ${target_name} IMPORTED_IMPLIB_RELEASE)
+  get_target_property(_snd_dbg_location ${target_name} IMPORTED_LOCATION_DEBUG)
+  get_target_property(_snd_rel_location ${target_name} IMPORTED_LOCATION_RELEASE)
+
+  set(_missing_debug_artifact OFF)
+  if (_snd_dbg_implib AND NOT EXISTS "${_snd_dbg_implib}")
+    set(_missing_debug_artifact ON)
+  endif()
+  if (_snd_dbg_location AND NOT EXISTS "${_snd_dbg_location}")
+    set(_missing_debug_artifact ON)
+  endif()
+
+  if (_missing_debug_artifact)
+    if ((_snd_rel_implib AND EXISTS "${_snd_rel_implib}") OR (_snd_rel_location AND EXISTS "${_snd_rel_location}"))
+      set_property(TARGET ${target_name} PROPERTY MAP_IMPORTED_CONFIG_DEBUG Release)
+      set_property(TARGET ${target_name} PROPERTY MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
+      set_property(TARGET ${target_name} PROPERTY MAP_IMPORTED_CONFIG_MINSIZEREL Release)
+      message(WARNING
+        "${target_name}: Debug artifact is missing, falling back to Release import library from SndFile package")
+    endif()
+  endif()
+endfunction()
+
 add_library(core_audio STATIC
   ${CMAKE_SOURCE_DIR}/core/audio/src/sndfile_replay_source.cc
 )
@@ -63,8 +95,10 @@ target_include_directories(core_audio PUBLIC
 )
 
 if (TARGET SndFile::sndfile)
+  _uav_fix_missing_sndfile_debug_import(SndFile::sndfile)
   target_link_libraries(core_audio PUBLIC SndFile::sndfile)
 elseif (TARGET sndfile::sndfile)
+  _uav_fix_missing_sndfile_debug_import(sndfile::sndfile)
   target_link_libraries(core_audio PUBLIC sndfile::sndfile)
 else()
   message(FATAL_ERROR "libsndfile найден, но импорт-таргет не обнаружен (ожидали SndFile::sndfile или sndfile::sndfile)")

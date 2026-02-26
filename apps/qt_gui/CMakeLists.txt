@@ -45,7 +45,7 @@ if (WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
 endif()
 
 set(_UAV_LOCAL_VCPKG_ROOT "")
-if (DEFINED VCPKG_TARGET_TRIPLET)
+if (WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
   set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
 endif()
 
@@ -54,7 +54,10 @@ if (_UAV_LOCAL_VCPKG_ROOT AND EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/Snd
 endif()
 
 set(_UAV_SNDFILE_TARGET "")
-find_package(SndFile CONFIG QUIET)
+if (WIN32)
+  find_package(SndFile CONFIG QUIET)
+endif()
+
 if (TARGET SndFile::sndfile)
   set(_UAV_SNDFILE_TARGET SndFile::sndfile)
 elseif (TARGET sndfile::sndfile)

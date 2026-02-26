@@ -3,7 +3,9 @@
 #include <chrono>
 #include <thread>
 
+#if UAV_SNDFILE_AVAILABLE
 #include <sndfile.h>
+#endif
 
 namespace core::audio {
 
@@ -21,6 +23,13 @@ namespace core::audio {
     bool SndfileReplaySource::Open(const AudioSourceConfig& cfg) {
         cfg_ = cfg;
         Close();
+
+#if !UAV_SNDFILE_AVAILABLE
+        (void)cfg_;
+        file_sr_ = 0;
+        file_ch_ = 0;
+        return false;
+#else
 
         SF_INFO sfinfo{};
         SNDFILE* f = sf_open(path_.c_str(), SFM_READ, &sfinfo);
@@ -41,23 +50,33 @@ namespace core::audio {
 
         t0_ns_ = now_ns();
         return true;
+#endif
     }
 
     void SndfileReplaySource::Close() {
+#if UAV_SNDFILE_AVAILABLE
         if (snd_) {
             sf_close(reinterpret_cast<SNDFILE*>(snd_));
             snd_ = nullptr;
         }
+#endif
         buf_.clear();
     }
 
     void SndfileReplaySource::resetToLoopStart() {
+#if !UAV_SNDFILE_AVAILABLE
+        return;
+#else
         if (!snd_) return;
         sf_seek(reinterpret_cast<SNDFILE*>(snd_), 0, SEEK_SET);
         t0_ns_ = now_ns();
+#endif
     }
 
     std::optional<AudioChunk> SndfileReplaySource::Read() {
+#if !UAV_SNDFILE_AVAILABLE
+        return std::nullopt;
+#else
         if (!snd_) return std::nullopt;
 
         const int frames_per_chunk = (cfg_.sample_rate * cfg_.chunk_ms) / 1000;
@@ -90,6 +109,7 @@ namespace core::audio {
         chunk.interleaved = std::span<const float>(buf_.data(),
             static_cast<std::size_t>(static_cast<int>(got_frames) * cfg_.channels));
         return chunk;
+#endif
     }
 
 }  // namespace core::audio

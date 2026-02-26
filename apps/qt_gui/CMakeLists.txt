@@ -40,6 +40,16 @@ target_compile_features(core_telemetry PUBLIC cxx_std_20)
 # - сначала ищем config-пакет
 # - если он недоступен/битый, используем локальный fallback из vcpkg_installed
 # =================================================
+set(_UAV_REQUIRE_SNDFILE_DEFAULT ON)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|armv7|arm)")
+  set(_UAV_REQUIRE_SNDFILE_DEFAULT OFF)
+endif()
+
+option(UAV_REQUIRE_SNDFILE
+  "Require libsndfile during configure (OFF allows a stubbed replay source when library is unavailable)"
+  ${_UAV_REQUIRE_SNDFILE_DEFAULT}
+)
+
 if (WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
   set(VCPKG_TARGET_TRIPLET x64-windows)
 endif()
@@ -98,10 +108,16 @@ else()
     set(_UAV_SNDFILE_TARGET UAV::sndfile)
     message(WARNING
       "SndFile config package is unavailable or broken; using fallback library: ${_UAV_SNDFILE_RELEASE_LIB}")
-  else()
+  elseif (UAV_REQUIRE_SNDFILE)
     message(FATAL_ERROR
       "libsndfile не найден. Проверены config package, локальный vcpkg fallback и системные пути. "
-      "Установите пакет dev-заголовков (например, libsndfile1-dev)."
+            "Установите пакет dev-заголовков (например, libsndfile1-dev), "
+      "либо пересоберите с -DUAV_REQUIRE_SNDFILE=OFF."
+    )
+  else()
+    message(WARNING
+      "libsndfile не найден: replay source будет собран в режиме заглушки. "
+      "Для полноценного чтения WAV/FLAC установите пакет dev-заголовков (например, libsndfile1-dev)."
     )
   endif()
 endif()
@@ -145,7 +161,12 @@ target_include_directories(core_audio PUBLIC
   ${CMAKE_SOURCE_DIR}/core/audio/include
 )
 
-target_link_libraries(core_audio PUBLIC ${_UAV_SNDFILE_TARGET})
+if (_UAV_SNDFILE_TARGET)
+  target_compile_definitions(core_audio PUBLIC UAV_SNDFILE_AVAILABLE=1)
+  target_link_libraries(core_audio PUBLIC ${_UAV_SNDFILE_TARGET})
+else()
+  target_compile_definitions(core_audio PUBLIC UAV_SNDFILE_AVAILABLE=0)
+endif()
 target_compile_features(core_audio PUBLIC cxx_std_20)
 
 # =================================================

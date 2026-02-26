@@ -6,7 +6,8 @@
 namespace core::telemetry {
 
 TelemetryBus::TelemetryBus() {
-  latest_.store(SnapshotPtr{}, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(latest_mu_);
+    latest_.reset();
 }
 
 TelemetryBus::~TelemetryBus() = default;
@@ -15,7 +16,10 @@ void TelemetryBus::Publish(std::shared_ptr<TelemetrySnapshot> snapshot) {
   if (!snapshot) return;
 
   SnapshotPtr frozen = std::const_pointer_cast<const TelemetrySnapshot>(std::move(snapshot));
-  latest_.store(std::move(frozen), std::memory_order_release);
+  {
+      std::lock_guard<std::mutex> lk(latest_mu_);
+      latest_ = std::move(frozen);
+  }
   publish_count_.fetch_add(1, std::memory_order_relaxed);
 
   std::vector<Callback> callbacks;
@@ -27,7 +31,11 @@ void TelemetryBus::Publish(std::shared_ptr<TelemetrySnapshot> snapshot) {
     }
   }
 
-  SnapshotPtr cur = latest_.load(std::memory_order_acquire);
+  SnapshotPtr cur;
+  {
+      std::lock_guard<std::mutex> lk(latest_mu_);
+      cur = latest_;
+  }
   if (!cur) return;
 
   for (auto& cb : callbacks) {
@@ -36,7 +44,8 @@ void TelemetryBus::Publish(std::shared_ptr<TelemetrySnapshot> snapshot) {
 }
 
 TelemetryBus::SnapshotPtr TelemetryBus::Latest() const noexcept {
-  return latest_.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lk(latest_mu_);
+    return latest_;
 }
 
 std::uint64_t TelemetryBus::PublishCount() const noexcept {

@@ -36,7 +36,8 @@ class TelemetryBus {
     Callback cb;
   };
 
-  std::atomic<SnapshotPtr> latest_{};
+  mutable std::mutex latest_mu_;
+  SnapshotPtr latest_{};
   std::atomic<std::uint64_t> publish_count_{0};
 
   mutable std::mutex subs_mu_;

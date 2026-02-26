@@ -40,12 +40,16 @@ target_compile_features(core_telemetry PUBLIC cxx_std_20)
 # - сначала ищем config-пакет
 # - если он недоступен/битый, используем локальный fallback из vcpkg_installed
 # =================================================
-if (NOT DEFINED VCPKG_TARGET_TRIPLET)
+if (WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
   set(VCPKG_TARGET_TRIPLET x64-windows)
 endif()
 
-set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
-if (EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/SndFileConfig.cmake")
+set(_UAV_LOCAL_VCPKG_ROOT "")
+if (DEFINED VCPKG_TARGET_TRIPLET)
+  set(_UAV_LOCAL_VCPKG_ROOT "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+endif()
+
+if (_UAV_LOCAL_VCPKG_ROOT AND EXISTS "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile/SndFileConfig.cmake")
   list(PREPEND CMAKE_PREFIX_PATH "${_UAV_LOCAL_VCPKG_ROOT}")
 endif()
 
@@ -56,16 +60,28 @@ if (TARGET SndFile::sndfile)
 elseif (TARGET sndfile::sndfile)
   set(_UAV_SNDFILE_TARGET sndfile::sndfile)
 else()
-  find_library(_UAV_SNDFILE_RELEASE_LIB
-    NAMES sndfile libsndfile
-    PATHS "${_UAV_LOCAL_VCPKG_ROOT}/lib"
-    NO_DEFAULT_PATH
-  )
-  find_path(_UAV_SNDFILE_INCLUDE_DIR
-    NAMES sndfile.h
-    PATHS "${_UAV_LOCAL_VCPKG_ROOT}/include"
-    NO_DEFAULT_PATH
-  )
+  set(_UAV_SNDFILE_RELEASE_LIB "")
+  set(_UAV_SNDFILE_INCLUDE_DIR "")
+
+  # 1) Local vcpkg fallback (mostly for Windows dev env)
+  if (_UAV_LOCAL_VCPKG_ROOT)
+    find_library(_UAV_SNDFILE_RELEASE_LIB
+      NAMES sndfile libsndfile
+      PATHS "${_UAV_LOCAL_VCPKG_ROOT}/lib"
+      NO_DEFAULT_PATH
+    )
+    find_path(_UAV_SNDFILE_INCLUDE_DIR
+      NAMES sndfile.h
+      PATHS "${_UAV_LOCAL_VCPKG_ROOT}/include"
+      NO_DEFAULT_PATH
+    )
+  endif()
+
+  # 2) System fallback (Linux, including RK3588 kits)
+  if (NOT _UAV_SNDFILE_RELEASE_LIB OR NOT _UAV_SNDFILE_INCLUDE_DIR)
+    find_library(_UAV_SNDFILE_RELEASE_LIB NAMES sndfile libsndfile)
+    find_path(_UAV_SNDFILE_INCLUDE_DIR NAMES sndfile.h)
+  endif()
 
   if (_UAV_SNDFILE_RELEASE_LIB AND _UAV_SNDFILE_INCLUDE_DIR)
     add_library(UAV::sndfile UNKNOWN IMPORTED)
@@ -81,8 +97,8 @@ else()
       "SndFile config package is unavailable or broken; using fallback library: ${_UAV_SNDFILE_RELEASE_LIB}")
   else()
     message(FATAL_ERROR
-      "libsndfile не найден. Проверены config package и fallback пути: "
-      "${_UAV_LOCAL_VCPKG_ROOT}/share/SndFile, ${_UAV_LOCAL_VCPKG_ROOT}/lib, ${_UAV_LOCAL_VCPKG_ROOT}/include"
+      "libsndfile не найден. Проверены config package, локальный vcpkg fallback и системные пути. "
+      "Установите пакет dev-заголовков (например, libsndfile1-dev)."
     )
   endif()
 endif()

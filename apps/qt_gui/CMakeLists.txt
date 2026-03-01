@@ -302,7 +302,7 @@ if (UAV_HAVE_TFLITE)
 endif()
 
 target_link_libraries(qt_bridge PUBLIC
-  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets
   core_telemetry
   core_audio
   core_dsp
@@ -347,7 +347,7 @@ endif()
 #)
 
 target_link_libraries(uav_acoustic_gui PRIVATE
-  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets
   qt_bridge
 )
 
@@ -379,7 +379,6 @@ if (WIN32)
     if (EXISTS "${_UAV_WINDEPLOYQT}")
       add_custom_command(TARGET uav_acoustic_gui POST_BUILD
         COMMAND "${_UAV_WINDEPLOYQT}"
-          --qmldir "${CMAKE_SOURCE_DIR}/qml"
           "$<TARGET_FILE:uav_acoustic_gui>"
       )
     else()

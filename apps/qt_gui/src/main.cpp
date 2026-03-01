@@ -110,9 +110,9 @@ public:
         leftPanel->setFixedWidth(260);
         leftPanel->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
         auto* leftLayout = new QVBoxLayout(leftPanel);
-        auto* leftHeader = new QLabel("ÊÎÌÀÍÄÍÛÉ ÏÓÍÊÒ", leftPanel);
+        auto* leftHeader = new QLabel("", leftPanel);
         leftHeader->setStyleSheet("background:#2C77D1; font-weight:700; font-size:16px; padding:8px; border:1px solid #9DB7D7;");
-        auto* leftText = new QLabel("(ëåâàÿ ïàíåëü — ðåçåðâ)", leftPanel);
+        auto* leftText = new QLabel("", leftPanel);
         leftText->setStyleSheet("color:#BFD3EE; padding:12px;");
         leftLayout->addWidget(leftHeader);
         leftLayout->addWidget(leftText);

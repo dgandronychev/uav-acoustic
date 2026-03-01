@@ -6,10 +6,6 @@
 
 namespace qt_bridge {
 
-    PcenImageProvider::PcenImageProvider()
-        : QQuickImageProvider(QQuickImageProvider::Image) {
-    }
-
     void PcenImageProvider::SetPcenMatrix(const std::vector<float>& frames, int n_mels, int n_frames) {
         QMutexLocker lk(&mu_);
         n_mels_ = n_mels;
@@ -17,21 +13,20 @@ namespace qt_bridge {
         frames_ = frames;
     }
 
-    QImage PcenImageProvider::requestImage(const QString& /*id*/, QSize* size, const QSize& /*requestedSize*/) {
+    QImage PcenImageProvider::GetLatestImage() const {
         QImage img;
         {
-            QMutexLocker lk(&mu_);
-            if (n_mels_ <= 0 || n_frames_ <= 0 || frames_.empty()) {
-                img = QImage(128, 64, QImage::Format_RGB32);
-                img.fill(Qt::black);
-            }
-            else {
-                img = QImage(n_frames_, n_mels_, QImage::Format_RGB32);
-                BuildNormalizedImageLocked(&img);
-            }
+        QMutexLocker lk(&mu_);
+        if (n_mels_ <= 0 || n_frames_ <= 0 || frames_.empty()) {
+            img = QImage(128, 64, QImage::Format_RGB32);
+            img.fill(Qt::black);
+        }
+        else {
+            img = QImage(n_frames_, n_mels_, QImage::Format_RGB32);
+            BuildNormalizedImageLocked(&img);
         }
 
-        if (size) *size = img.size();
+    }
         return img;
     }
 
@@ -41,13 +36,33 @@ namespace qt_bridge {
     }
 
     void PcenImageProvider::BuildNormalizedImageLocked(QImage* out) const {
-        // out has size (n_frames_ x n_mels_) : x=time, y=mel
         const int W = n_frames_;
         const int H = n_mels_;
 
-        // 1) log1p transform into temp
         std::vector<float> tmp;
         tmp.resize(static_cast<std::size_t>(W) * static_cast<std::size_t>(H));
+
+        for (int x = 0; x < W; ++x) {
+            for (int y = 0; y < H; ++y) {
+                const std::size_t idx = static_cast<std::size_t>(x) * static_cast<std::size_t>(H) + static_cast<std::size_t>(y);
+                tmp[idx] = safe_log1p(frames_[idx]);
+            }
+        }
+        const std::size_t N = tmp.size();
+        if (N == 0) {
+            out->fill(Qt::black);
+            return;
+    }
+
+
+    auto tmp2 = tmp;
+    const std::size_t k_lo = static_cast<std::size_t>(0.02 * static_cast<double>(N));
+    const std::size_t k_hi = static_cast<std::size_t>(0.98 * static_cast<double>(N));
+    const std::size_t lo_i = std::min(k_lo, N - 1);
+    const std::size_t hi_i = std::min(k_hi, N - 1);
+
+    std::nth_element(tmp2.begin(), tmp2.begin() + lo_i, tmp2.end());
+    const float lo = tmp2[lo_i];
 
         for (int x = 0; x < W; ++x) {
             for (int y = 0; y < H; ++y) {

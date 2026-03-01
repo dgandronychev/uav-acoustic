@@ -1,7 +1,16 @@
-#include <QGuiApplication>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QUrl>
+#include <QApplication>
+#include <QWidget>
+#include <QLabel>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QGridLayout>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPaintEvent>
+#include <QTimer>
+#include <QPixmap>
+#include <QImage>
 
 #include <chrono>
 #include <thread>
@@ -32,16 +41,200 @@ static std::int64_t now_ns() {
     using namespace std::chrono;
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
 }
+class PlotWidget final : public QWidget {
+public:
+    explicit PlotWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumHeight(160);
+    }
+
+    void SetData(const QVector<double>& values, double threshold) {
+        values_ = values;
+        threshold_ = threshold;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor("#0B0F14"));
+
+        const QRect area = rect().adjusted(12, 12, -12, -12);
+        if (area.width() <= 0 || area.height() <= 0) return;
+
+        p.setPen(QPen(QColor("#BFD3EE"), 1));
+        p.drawRect(area);
+
+        auto yFromProb = [&](double prob) {
+            const double clamped = std::clamp(prob, 0.0, 1.0);
+            return area.bottom() - static_cast<int>(clamped * area.height());
+            };
+
+        p.setPen(QPen(QColor("#646F7F"), 1, Qt::DashLine));
+        p.drawLine(area.left(), yFromProb(threshold_), area.right(), yFromProb(threshold_));
+
+        if (values_.size() < 2) return;
+
+        QPainterPath path;
+        const int n = values_.size();
+        for (int i = 0; i < n; ++i) {
+            const double t = static_cast<double>(i) / static_cast<double>(n - 1);
+            const int x = area.left() + static_cast<int>(t * area.width());
+            const int y = yFromProb(values_[i]);
+            if (i == 0) path.moveTo(x, y);
+            else path.lineTo(x, y);
+        }
+
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(QPen(QColor("#FF5A5A"), 2));
+        p.drawPath(path);
+    }
+
+private:
+    QVector<double> values_;
+    double threshold_ = 0.65;
+};
+
+class MainWidget final : public QWidget {
+public:
+    MainWidget(qt_bridge::TelemetryProvider* telemetry, qt_bridge::PcenImageProvider* pcen_provider, QWidget* parent = nullptr)
+        : QWidget(parent), telemetry_(telemetry), pcen_provider_(pcen_provider) {
+        setWindowTitle("UAV Acoustic (QWidget)");
+        resize(1365, 768);
+        setStyleSheet("background-color:#123A6E; color:#EAF2FF;");
+
+        auto* root = new QHBoxLayout(this);
+        root->setContentsMargins(18, 18, 18, 18);
+        root->setSpacing(0);
+
+        auto* leftPanel = new QFrame(this);
+        leftPanel->setFixedWidth(260);
+        leftPanel->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* leftLayout = new QVBoxLayout(leftPanel);
+        auto* leftHeader = new QLabel("КОМАНДНЫЙ ПУНКТ", leftPanel);
+        leftHeader->setStyleSheet("background:#2C77D1; font-weight:700; font-size:16px; padding:8px; border:1px solid #9DB7D7;");
+        auto* leftText = new QLabel("(левая панель — резерв)", leftPanel);
+        leftText->setStyleSheet("color:#BFD3EE; padding:12px;");
+        leftLayout->addWidget(leftHeader);
+        leftLayout->addWidget(leftText);
+        leftLayout->addStretch();
+
+        auto* center = new QFrame(this);
+        center->setStyleSheet("QFrame{background:#0F2F5C;border:2px solid #9DB7D7;}");
+        auto* centerLayout = new QVBoxLayout(center);
+        centerLayout->setSpacing(0);
+        centerLayout->setContentsMargins(0, 0, 0, 0);
+
+        auto* bannerZone = new QFrame(center);
+        bannerZone->setFixedHeight(90);
+        bannerZone->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* bannerLayout = new QVBoxLayout(bannerZone);
+        bannerLayout->setContentsMargins(0, 0, 0, 0);
+        bannerLabel_ = new QLabel("ОБНАРУЖЕН БПЛА", bannerZone);
+        bannerLabel_->setAlignment(Qt::AlignCenter);
+        bannerLabel_->setFixedHeight(44);
+        bannerLabel_->setStyleSheet("background:#FFE600; color:black; font-weight:700; font-size:16px;");
+        bannerLabel_->hide();
+        bannerLayout->addStretch();
+        bannerLayout->addWidget(bannerLabel_, 0, Qt::AlignCenter);
+        bannerLayout->addStretch();
+
+        auto* pcenZone = new QFrame(center);
+        pcenZone->setStyleSheet("QFrame{background:#0F2F5C;border:2px solid #9DB7D7;}");
+        auto* pcenLayout = new QVBoxLayout(pcenZone);
+        pcenLayout->setContentsMargins(10, 10, 10, 10);
+        pcenImageLabel_ = new QLabel("PCEN MEL", pcenZone);
+        pcenImageLabel_->setAlignment(Qt::AlignCenter);
+        pcenImageLabel_->setMinimumHeight(260);
+        pcenImageLabel_->setStyleSheet("color:#BFD3EE;");
+        pcenLayout->addWidget(pcenImageLabel_);
+
+        auto* plotZone = new QFrame(center);
+        plotZone->setFixedHeight(190);
+        plotZone->setStyleSheet("QFrame{background:#0F2F5C;border:2px solid #9DB7D7;}");
+        auto* plotLayout = new QVBoxLayout(plotZone);
+        plotLayout->setContentsMargins(10, 10, 10, 10);
+        plotWidget_ = new PlotWidget(plotZone);
+        plotLayout->addWidget(plotWidget_);
+
+        centerLayout->addWidget(bannerZone);
+        centerLayout->addWidget(pcenZone, 1);
+        centerLayout->addWidget(plotZone);
+
+        auto* rightPanel = new QFrame(this);
+        rightPanel->setFixedWidth(320);
+        rightPanel->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* rightLayout = new QVBoxLayout(rightPanel);
+        rightLayout->setContentsMargins(10, 10, 10, 10);
+        auto* title = new QLabel("ПАНЕЛЬ ДАННЫХ", rightPanel);
+        title->setStyleSheet("font-size:16px; font-weight:700; background:#2C77D1; padding:8px;");
+        rightLayout->addWidget(title);
+
+        pDetectLabel_ = new QLabel("P_detect: 0.000", rightPanel);
+        fsmLabel_ = new QLabel("FSM: IDLE", rightPanel);
+        frameLabel_ = new QLabel("Frame ID: 0", rightPanel);
+        for (QLabel* lbl : { pDetectLabel_, fsmLabel_, frameLabel_ }) {
+            lbl->setStyleSheet("font-size:14px; padding:4px;");
+            rightLayout->addWidget(lbl);
+        }
+        rightLayout->addStretch();
+
+        root->addWidget(leftPanel);
+        root->addWidget(center, 1);
+        root->addWidget(rightPanel);
+
+        connect(telemetry_, &qt_bridge::TelemetryProvider::updated, this, [this] { Refresh(); });
+        Refresh();
+    }
+
+private:
+    void Refresh() {
+        const double p = telemetry_->pDetectLatest();
+        const QString fsm = telemetry_->fsmState();
+        const int frame = telemetry_->frameId();
+        const double threshold = 0.65;
+
+        pDetectLabel_->setText(QString("P_detect: %1").arg(p, 0, 'f', 3));
+        fsmLabel_->setText(QString("FSM: %1").arg(fsm));
+        frameLabel_->setText(QString("Frame ID: %1").arg(frame));
+        bannerLabel_->setVisible(p >= threshold);
+
+        QImage img = pcen_provider_->GetLatestImage();
+        if (!img.isNull()) {
+            pcenImageLabel_->setPixmap(QPixmap::fromImage(img).scaled(pcenImageLabel_->size(), Qt::IgnoreAspectRatio, Qt::FastTransformation));
+        }
+
+        QVector<double> values;
+        const QVariantList tl = telemetry_->timeline();
+        values.reserve(tl.size());
+        for (const QVariant& point : tl) {
+            const QVariantMap m = point.toMap();
+            values.push_back(m.value("p").toDouble());
+        }
+        plotWidget_->SetData(values, threshold);
+    }
+
+private:
+    qt_bridge::TelemetryProvider* telemetry_;
+    qt_bridge::PcenImageProvider* pcen_provider_;
+
+    QLabel* bannerLabel_ = nullptr;
+    QLabel* pcenImageLabel_ = nullptr;
+    PlotWidget* plotWidget_ = nullptr;
+
+    QLabel* pDetectLabel_ = nullptr;
+    QLabel* fsmLabel_ = nullptr;
+    QLabel* frameLabel_ = nullptr;
+};
+
 
 int main(int argc, char* argv[]) {
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     auto bus = std::make_shared<core::telemetry::TelemetryBus>();
 
-    // --- PCEN ring buffer (for UI heatmap) ---
     auto pcen_rb = std::make_shared<core::dsp::PcenRingBuffer>(
         /*n_mels=*/128,
-        /*capacity_frames=*/1500  // ~15s if hop ~10ms
+        /*capacity_frames=*/1500
     );
 
     core::dsp::PcenConfig pcfg;
@@ -50,13 +243,10 @@ int main(int argc, char* argv[]) {
     pcfg.win_length = 1024;
     pcfg.hop_length = 256;
     pcfg.n_mels = 128;
-    // PCEN from config_train.json
-    pcfg.alpha = 0.6f;   // gain
-    pcfg.delta = 2.0f;   // bias
-    pcfg.r = 0.1f;       // power
+    pcfg.alpha = 0.6f;
+    pcfg.delta = 2.0f;
+    pcfg.r = 0.1f;
     pcfg.eps = 1e-6f;
-    // time_constant -> smoothing s
-    // s = 1 - exp(-hop / (sr * time_constant))
     {
         const float time_constant = 0.4f;
         const float hop_sec = static_cast<float>(pcfg.hop_length) / static_cast<float>(pcfg.sample_rate);
@@ -82,7 +272,7 @@ int main(int argc, char* argv[]) {
     dcfg.frame_ms = 20;
     core::detect::MockDetector detector(dcfg);
 
-    // --- FSM (подсистема 5) параметры ---
+    // --- FSM параметры ---
     const float p_on = 0.65f;
     const float p_off = 0.45f;
     const int t_confirm_ms = 200;
@@ -94,40 +284,34 @@ int main(int argc, char* argv[]) {
     int below_ms = 0;
     int cooldown_left_ms = 0;
 
-    // --- SegmentBuilder (подсистема 6) ---
+    // --- SegmentBuilder  ---
     core::segment::SegmentBuilder::Config scfg;
     scfg.n_mels = 64;
-    scfg.hop_ms = 10;           // соответствует pcfg.hop_length=160 @ 16k
+    scfg.hop_ms = 10;          
     scfg.pre_roll_ms = 2000;    // 2s до старта
     scfg.post_roll_ms = 2000;   // 2s после конца
     scfg.max_event_ms = 12000;  // защита
     scfg.out_dir = "segments";
 
-    // На всякий случай создадим директорию
     try {
         std::filesystem::create_directories(scfg.out_dir);
     }
     catch (...) {
-        // не фатально
     }
 
     core::segment::SegmentBuilder segment_builder(pcen_rb, scfg);
 
-    QQmlApplicationEngine engine;
-
     auto* pcenProvider = new qt_bridge::PcenImageProvider();
-    engine.addImageProvider("pcen", pcenProvider);
 
     auto* telemetry = new qt_bridge::TelemetryProvider(bus, pcen_rb, pcenProvider);
     telemetry->Start(12);
-    engine.rootContext()->setContextProperty("telemetry", telemetry);
 
-    std::atomic<bool> running{ true };
+    MainWidget window(telemetry, pcenProvider);
 
     // ---- Audio replay + PCEN + detector thread ----
+    std::atomic<bool> running{ true };
     std::thread audio_thread([&] {
-        std::string path =
-            "C:/Users/Owner/_pish/test_orig.flac";
+        std::string path = "C:/Users/Owner/_pish/test_orig.flac";
 
         core::audio::AudioSourceConfig acfg;
         acfg.sample_rate = 22050;
@@ -305,15 +489,8 @@ int main(int argc, char* argv[]) {
 
             bus->Publish(std::move(s));
         }
-        });
-
-    engine.load(QUrl(QStringLiteral("qrc:/Main.qml")));
-    if (engine.rootObjects().isEmpty()) {
-        running.store(false);
-        audio_thread.join();
-        return -1;
-    }
-
+    });
+    window.show();
     const int rc = app.exec();
 
     running.store(false);

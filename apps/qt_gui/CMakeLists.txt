@@ -9,9 +9,8 @@ endif()
 # Keep this as a subdirectory CMake file (no nested project()) so IDE auto-setup
 # hooks are not re-run twice and to simplify cross-platform configuration.
 
-# Prefer Qt6, but allow Qt5 fallback for embedded Linux kits (e.g. RK3588).
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Qml Quick)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Qml Quick)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets Qml Quick)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets Qml Quick)
 
 if (QT_VERSION_MAJOR EQUAL 6)
   if (COMMAND qt_standard_project_setup)
@@ -303,7 +302,7 @@ if (UAV_HAVE_TFLITE)
 endif()
 
 target_link_libraries(qt_bridge PUBLIC
-  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
   core_telemetry
   core_audio
   core_dsp
@@ -348,7 +347,7 @@ endif()
 #)
 
 target_link_libraries(uav_acoustic_gui PRIVATE
-  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
+  Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Qml Qt${QT_VERSION_MAJOR}::Quick
   qt_bridge
 )
 
@@ -356,22 +355,6 @@ target_link_libraries(uav_acoustic_gui PRIVATE
 #  ${CMAKE_SOURCE_DIR}/core/tflite/include
 #)
 
-
-# =================================================
-# QML resources
-# =================================================
-set(QML_MAIN ${CMAKE_SOURCE_DIR}/qml/Main.qml)
-set_source_files_properties(${QML_MAIN} PROPERTIES QT_RESOURCE_ALIAS "Main.qml")
-
-if (QT_VERSION_MAJOR EQUAL 6)
-  qt_add_resources(uav_acoustic_gui qml_resources
-    PREFIX "/"
-    FILES ${QML_MAIN}
-  )
-else()
-  qt5_add_resources(UAV_QML_RCC ${QML_MAIN})
-  target_sources(uav_acoustic_gui PRIVATE ${UAV_QML_RCC})
-endif()
 
 set_target_properties(uav_acoustic_gui PROPERTIES WIN32_EXECUTABLE TRUE)
 

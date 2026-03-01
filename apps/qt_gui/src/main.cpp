@@ -17,6 +17,7 @@
 #include <atomic>
 #include <memory>
 #include <algorithm>
+#include <array>
 #include <vector>
 #include <deque>
 #include <iostream>
@@ -47,9 +48,10 @@ public:
         setMinimumHeight(160);
     }
 
-    void SetData(const QVector<double>& values, double threshold) {
+    void SetData(const QVector<double>& values, double threshold_on, double threshold_off) {
         values_ = values;
-        threshold_ = threshold;
+        threshold_on_ = threshold_on;
+        threshold_off_ = threshold_off;
         update();
     }
 
@@ -69,9 +71,10 @@ protected:
             return area.bottom() - static_cast<int>(clamped * area.height());
             };
 
-        p.setPen(QPen(QColor("#646F7F"), 1, Qt::DashLine));
-        p.drawLine(area.left(), yFromProb(threshold_), area.right(), yFromProb(threshold_));
-
+        p.setPen(QPen(QColor("#ffd24d"), 1, Qt::DashLine));
+        p.drawLine(area.left(), yFromProb(threshold_on_), area.right(), yFromProb(threshold_on_));
+        p.setPen(QPen(QColor("#4db2ff"), 1, Qt::DashLine));
+        p.drawLine(area.left(), yFromProb(threshold_off_), area.right(), yFromProb(threshold_off_));
         if (values_.size() < 2) return;
 
         QPainterPath path;
@@ -91,7 +94,8 @@ protected:
 
 private:
     QVector<double> values_;
-    double threshold_ = 0.65;
+    double threshold_on_ = 0.65;
+    double threshold_off_ = 0.45;
 };
 
 class MainWidget final : public QWidget {
@@ -100,6 +104,8 @@ public:
         : QWidget(parent), telemetry_(telemetry), pcen_provider_(pcen_provider) {
         setWindowTitle("UAV Acoustic (QWidget)");
         resize(1365, 768);
+        setMinimumSize(1365, 768);
+        setMaximumSize(1365, 768);
         setStyleSheet("background-color:#123A6E; color:#EAF2FF;");
 
         auto* root = new QHBoxLayout(this);
@@ -110,9 +116,10 @@ public:
         leftPanel->setFixedWidth(260);
         leftPanel->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
         auto* leftLayout = new QVBoxLayout(leftPanel);
-        auto* leftHeader = new QLabel("", leftPanel);
+        auto* leftHeader = new QLabel(QString::fromUtf8("The command post"), leftPanel); 
+        leftHeader->setAlignment(Qt::AlignCenter);
         leftHeader->setStyleSheet("background:#2C77D1; font-weight:700; font-size:16px; padding:8px; border:1px solid #9DB7D7;");
-        auto* leftText = new QLabel("", leftPanel);
+        auto* leftText = new QLabel(QString::fromUtf8("rezerv"), leftPanel);
         leftText->setStyleSheet("color:#BFD3EE; padding:12px;");
         leftLayout->addWidget(leftHeader);
         leftLayout->addWidget(leftText);
@@ -129,7 +136,7 @@ public:
         bannerZone->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
         auto* bannerLayout = new QVBoxLayout(bannerZone);
         bannerLayout->setContentsMargins(0, 0, 0, 0);
-        bannerLabel_ = new QLabel("ÎÁÍÀÐÓÆÅÍ ÁÏËÀ", bannerZone);
+        bannerLabel_ = new QLabel(QString::fromUtf8("UAV DETECTED"), bannerZone);
         bannerLabel_->setAlignment(Qt::AlignCenter);
         bannerLabel_->setFixedHeight(44);
         bannerLabel_->setStyleSheet("background:#FFE600; color:black; font-weight:700; font-size:16px;");
@@ -164,19 +171,89 @@ public:
         rightPanel->setFixedWidth(320);
         rightPanel->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
         auto* rightLayout = new QVBoxLayout(rightPanel);
-        rightLayout->setContentsMargins(10, 10, 10, 10);
-        auto* title = new QLabel("ÏÀÍÅËÜ ÄÀÍÍÛÕ", rightPanel);
-        title->setStyleSheet("font-size:16px; font-weight:700; background:#2C77D1; padding:8px;");
-        rightLayout->addWidget(title);
+        rightLayout->setContentsMargins(0, 0, 0, 0);
+        rightLayout->setSpacing(0);
 
-        pDetectLabel_ = new QLabel("P_detect: 0.000", rightPanel);
-        fsmLabel_ = new QLabel("FSM: IDLE", rightPanel);
-        frameLabel_ = new QLabel("Frame ID: 0", rightPanel);
-        for (QLabel* lbl : { pDetectLabel_, fsmLabel_, frameLabel_ }) {
-            lbl->setStyleSheet("font-size:14px; padding:4px;");
-            rightLayout->addWidget(lbl);
-        }
-        rightLayout->addStretch();
+        auto* ch1Block = new QFrame(rightPanel);
+        ch1Block->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* ch1Layout = new QVBoxLayout(ch1Block);
+        ch1Layout->setContentsMargins(12, 12, 12, 12);
+        ch1Layout->setSpacing(8);
+        auto* ch1Title = new QLabel(QString::fromUtf8("1 channel"), ch1Block);
+        ch1Title->setStyleSheet("font-size:16px; font-weight:700;");
+        pDetectLabel_ = new QLabel("P = -", ch1Block);
+        auto* ch1Type = new QLabel(QString::fromUtf8("Type: Mavik_3T"), ch1Block);
+        auto* ch1Az = new QLabel(QString::fromUtf8("Azimuth: 150 degrees"), ch1Block);
+        pDetectLabel_->setStyleSheet("font-size:14px;");
+        ch1Type->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch1Az->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch1Layout->addWidget(ch1Title);
+        ch1Layout->addWidget(pDetectLabel_);
+        ch1Layout->addWidget(ch1Type);
+        ch1Layout->addWidget(ch1Az);
+        ch1Layout->addStretch();
+
+        auto* ch2Block = new QFrame(rightPanel);
+        ch2Block->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* ch2Layout = new QVBoxLayout(ch2Block);
+        ch2Layout->setContentsMargins(12, 12, 12, 12);
+        ch2Layout->setSpacing(8);
+        auto* ch2Title = new QLabel(QString::fromUtf8("2 channel"), ch2Block);
+        ch2Title->setStyleSheet("font-size:16px; font-weight:700;");
+        auto* ch2P = new QLabel("P = -", ch2Block);
+        auto* ch2Type = new QLabel(QString::fromUtf8("Type: -"), ch2Block);
+        auto* ch2Az = new QLabel(QString::fromUtf8("Azimuth: -"), ch2Block);
+        ch2P->setStyleSheet("font-size:14px;");
+        ch2Type->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch2Az->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch2Layout->addWidget(ch2Title);
+        ch2Layout->addWidget(ch2P);
+        ch2Layout->addWidget(ch2Type);
+        ch2Layout->addWidget(ch2Az);
+        ch2Layout->addStretch();
+
+        auto* ch3Block = new QFrame(rightPanel);
+        ch3Block->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* ch3Layout = new QVBoxLayout(ch3Block);
+        ch3Layout->setContentsMargins(12, 12, 12, 12);
+        ch3Layout->setSpacing(8);
+        auto* ch3Title = new QLabel(QString::fromUtf8("3 channel"), ch3Block);
+        ch3Title->setStyleSheet("font-size:16px; font-weight:700;");
+        auto* ch3P = new QLabel("P = -", ch3Block);
+        fsmLabel_ = new QLabel(QString::fromUtf8("Type: -"), ch3Block);
+        auto* ch3Az = new QLabel(QString::fromUtf8("Azimuth: -"), ch3Block);
+        ch3P->setStyleSheet("font-size:14px;");
+        fsmLabel_->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch3Az->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch3Layout->addWidget(ch3Title);
+        ch3Layout->addWidget(ch3P);
+        ch3Layout->addWidget(fsmLabel_);
+        ch3Layout->addWidget(ch3Az);
+        ch3Layout->addStretch();
+
+        auto* ch4Block = new QFrame(rightPanel);
+        ch4Block->setStyleSheet("QFrame{background:#1B4F8F;border:2px solid #9DB7D7;}");
+        auto* ch4Layout = new QVBoxLayout(ch4Block);
+        ch4Layout->setContentsMargins(12, 12, 12, 12);
+        ch4Layout->setSpacing(8);
+        auto* ch4Title = new QLabel(QString::fromUtf8("4 channel"), ch4Block);
+        ch4Title->setStyleSheet("font-size:16px; font-weight:700;");
+        auto* ch4P = new QLabel("P = -", ch4Block);
+        frameLabel_ = new QLabel(QString::fromUtf8("Azimuth: -"), ch4Block);
+        auto* ch4Type = new QLabel(QString::fromUtf8("Type: -"), ch4Block);
+        ch4P->setStyleSheet("font-size:14px;");
+        frameLabel_->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch4Type->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        ch4Layout->addWidget(ch4Title);
+        ch4Layout->addWidget(ch4P);
+        ch4Layout->addWidget(ch4Type);
+        ch4Layout->addWidget(frameLabel_);
+        ch4Layout->addStretch();
+
+        rightLayout->addWidget(ch1Block, 1);
+        rightLayout->addWidget(ch2Block, 1);
+        rightLayout->addWidget(ch3Block, 1);
+        rightLayout->addWidget(ch4Block, 1);
 
         root->addWidget(leftPanel);
         root->addWidget(center, 1);
@@ -193,9 +270,9 @@ private:
         const int frame = telemetry_->frameId();
         const double threshold = 0.65;
 
-        pDetectLabel_->setText(QString("P_detect: %1").arg(p, 0, 'f', 3));
-        fsmLabel_->setText(QString("FSM: %1").arg(fsm));
-        frameLabel_->setText(QString("Frame ID: %1").arg(frame));
+        pDetectLabel_->setText(QString("P = %1").arg(p, 0, 'f', 3));
+        fsmLabel_->setText(QString::fromUtf8("Type: %1").arg(fsm));
+        frameLabel_->setText(QString::fromUtf8("Azimuth: %1°").arg(frame % 360));
         bannerLabel_->setVisible(p >= threshold);
 
         QImage img = pcen_provider_->GetLatestImage();
@@ -210,7 +287,7 @@ private:
             const QVariantMap m = point.toMap();
             values.push_back(m.value("p").toDouble());
         }
-        plotWidget_->SetData(values, threshold);
+        plotWidget_->SetData(values, threshold, 0.45);
     }
 
 private:

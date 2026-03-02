@@ -35,6 +35,10 @@
 #include "core/detect/mock_detector.h"
 #include "core/segment/segment_builder.h"
 
+#if UAV_HAVE_TFLITE
+#include "core/tflite/tcn_detector.h"
+#endif
+
 #include "qt_bridge/telemetry_provider.h"
 #include "qt_bridge/pcen_image_provider.h"
 
@@ -182,14 +186,14 @@ public:
         auto* ch1Title = new QLabel(QString::fromUtf8("1 channel"), ch1Block);
         ch1Title->setStyleSheet("font-size:16px; font-weight:700;");
         pDetectLabel_ = new QLabel("P = -", ch1Block);
-        auto* ch1Type = new QLabel(QString::fromUtf8("Type: Mavik_3T"), ch1Block);
+        detectorLabel_ = new QLabel(QString::fromUtf8("Detector: -"), ch1Block);
         auto* ch1Az = new QLabel(QString::fromUtf8("Azimuth: 150 degrees"), ch1Block);
         pDetectLabel_->setStyleSheet("font-size:14px;");
-        ch1Type->setStyleSheet("font-size:14px; color:#BFD3EE;");
+        detectorLabel_->setStyleSheet("font-size:14px; color:#BFD3EE;");
         ch1Az->setStyleSheet("font-size:14px; color:#BFD3EE;");
         ch1Layout->addWidget(ch1Title);
         ch1Layout->addWidget(pDetectLabel_);
-        ch1Layout->addWidget(ch1Type);
+        ch1Layout->addWidget(detectorLabel_);
         ch1Layout->addWidget(ch1Az);
         ch1Layout->addStretch();
 
@@ -267,10 +271,12 @@ private:
     void Refresh() {
         const double p = telemetry_->pDetectLatest();
         const QString fsm = telemetry_->fsmState();
+        const QString detector = telemetry_->detectorBackend();
         const int frame = telemetry_->frameId();
         const double threshold = 0.65;
 
         pDetectLabel_->setText(QString("P = %1").arg(p, 0, 'f', 3));
+        detectorLabel_->setText(QString::fromUtf8("Detector: %1").arg(detector));
         fsmLabel_->setText(QString::fromUtf8("Type: %1").arg(fsm));
         frameLabel_->setText(QString::fromUtf8("Azimuth: %1°").arg(frame % 360));
         bannerLabel_->setVisible(p >= threshold);
@@ -299,6 +305,7 @@ private:
     PlotWidget* plotWidget_ = nullptr;
 
     QLabel* pDetectLabel_ = nullptr;
+    QLabel* detectorLabel_ = nullptr;
     QLabel* fsmLabel_ = nullptr;
     QLabel* frameLabel_ = nullptr;
 };
@@ -340,19 +347,21 @@ int main(int argc, char* argv[]) {
     }
     core::dsp::PcenExtractor pcen(pcfg);
 
-    // --- TCN detector (dynamic float32) ---
-    //core::tflite::TcnDetector::Config tcfg;
-    //core::tflite::TcnDetector tcn(pcen_rb, tcfg);
-
-    //tcfg.n_mels = 128;
-    //tcfg.n_frames = 169;
-    //tcfg.step_ms = 250;
-    //tcfg.num_threads = 2;
-    // Paths: adjust to your layout
-    //tcn.LoadModel("model_dynamic.tflite");
-    //tcn.LoadClassNames("class_names.txt");
-
+#if UAV_HAVE_TFLITE
     // --- Mock detector (without TFLite dependency) ---
+    core::ml::TcnDetector::Config tcfg;
+    tcfg.model_path = "model_dynamic.tflite";
+    tcfg.class_names_path = "class_names.txt";
+    tcfg.n_mels = 128;
+    tcfg.n_frames = 169;
+    core::ml::TcnDetector tcn(tcfg);
+    std::cout << "[DETECTOR] TCN compile-time enabled, runtime status: "
+        << (tcn.IsValid() ? "READY" : "NOT READY (fallback to MOCK)") << "\n";
+#else
+    std::cout << "[DETECTOR] TCN compile-time disabled, using MOCK detector\n";
+#endif
+
+    // --- Mock detector (fallback / default) ---
     core::detect::MockDetector::Config dcfg;
     dcfg.sample_rate = pcfg.sample_rate;
     dcfg.frame_ms = 20;
@@ -463,10 +472,24 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Run TCN inference periodically
-            //tcn.Tick(acfg.chunk_ms);
-            //const float p = tcn.p_detect();
-            const float p = detector.Process(mono.data(), frames);
+            // Run inference (TCN when available, mock fallback otherwise)
+            float p = detector.Process(mono.data(), frames);
+            bool tcn_used_for_latest = false;
+#if UAV_HAVE_TFLITE
+            if (tcn.IsValid()) {
+                std::vector<float> tcn_scores;
+                int available_frames = 0;
+                const auto pcen_window = pcen_rb->SnapshotLast(tcfg.n_frames, &available_frames);
+                const int need = tcfg.n_mels * tcfg.n_frames;
+                if (available_frames == tcfg.n_frames && static_cast<int>(pcen_window.size()) == need) {
+                    const int best = tcn.Run(pcen_window.data(), need, &tcn_scores);
+                    if (best >= 0 && !tcn_scores.empty()) {
+                        p = std::clamp(tcn_scores[static_cast<std::size_t>(best)], 0.0f, 1.0f);
+                        tcn_used_for_latest = true;
+                    }
+                }
+            }
+#endif
 
             // --- FSM update ---
             bool event_started = false;
@@ -558,6 +581,12 @@ int main(int argc, char* argv[]) {
             s->t_ns = t_ns;
             s->p_detect_latest = p;
             s->fsm_state = fsm;
+#if UAV_HAVE_TFLITE
+            s->tcn_available = tcn.IsValid();
+#else
+            s->tcn_available = false;
+#endif
+            s->tcn_used_for_latest = tcn_used_for_latest;
 
             // Эти поля должны быть добавлены в TelemetrySnapshot
             s->event_started = event_started;

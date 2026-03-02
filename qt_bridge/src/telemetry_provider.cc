@@ -41,6 +41,9 @@ namespace qt_bridge {
         if (snap) {
             p_detect_latest_ = snap->p_detect_latest;
             fsm_state_str_ = FsmToString(snap->fsm_state);
+            detector_backend_ = snap->tcn_used_for_latest
+                ? "TCN"
+                : (snap->tcn_available ? "MOCK (TCN ready)" : "MOCK");
 
             // Event flags only for current tick (so QML draws marker “now”)
             event_started_ = snap->event_started;

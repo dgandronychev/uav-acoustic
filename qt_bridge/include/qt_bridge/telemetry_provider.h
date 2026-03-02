@@ -20,6 +20,7 @@ namespace qt_bridge {
             Q_PROPERTY(QString fsmState READ fsmState NOTIFY updated)
             Q_PROPERTY(int frameId READ frameId NOTIFY updated)
             Q_PROPERTY(QVariantList timeline READ timeline NOTIFY updated)
+            Q_PROPERTY(QString detectorBackend READ detectorBackend NOTIFY updated)
 
             // New: event markers for “now”
             Q_PROPERTY(bool eventStarted READ eventStarted NOTIFY updated)
@@ -37,6 +38,7 @@ namespace qt_bridge {
         QString fsmState() const { return fsm_state_str_; }
         int frameId() const { return frame_id_; }
         QVariantList timeline() const { return timeline_; }
+        QString detectorBackend() const { return detector_backend_; }
 
         bool eventStarted() const { return event_started_; }
         bool eventEnded() const { return event_ended_; }
@@ -62,6 +64,7 @@ namespace qt_bridge {
         int frame_id_ = 0;
 
         QVariantList timeline_;
+        QString detector_backend_ = "MOCK";
 
         bool event_started_ = false;
         bool event_ended_ = false;

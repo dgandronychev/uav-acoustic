@@ -27,6 +27,12 @@ namespace core::telemetry {
 		bool event_started = false;
 		bool event_ended = false;
 
+		// Detector backend status for UI/debug.
+		// tcn_available: model and classes are loaded and usable.
+		// tcn_used_for_latest: latest p_detect came from TCN inference (otherwise mock fallback).
+		bool tcn_available = false;
+		bool tcn_used_for_latest = false;
+
 		// Timeline (fixed-size buffer like before)
 		static constexpr std::size_t kMaxTimeline = 128;
 		TimelinePoint timeline[kMaxTimeline]{};

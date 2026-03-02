@@ -315,6 +315,11 @@ if (UAV_HAVE_TFLITE)
   target_link_libraries(qt_bridge PUBLIC core_tflite)
 endif()
 
+target_compile_definitions(qt_bridge PUBLIC
+  $<$<BOOL:${UAV_HAVE_TFLITE}>:UAV_HAVE_TFLITE=1>
+  $<$<NOT:$<BOOL:${UAV_HAVE_TFLITE}>>:UAV_HAVE_TFLITE=0>
+)
+
 target_compile_features(qt_bridge PUBLIC cxx_std_20)
 
 # =================================================
@@ -351,10 +356,10 @@ target_link_libraries(uav_acoustic_gui PRIVATE
   qt_bridge
 )
 
-#target_include_directories(uav_acoustic_gui PRIVATE
-#  ${CMAKE_SOURCE_DIR}/core/tflite/include
-#)
-
+target_compile_definitions(uav_acoustic_gui PRIVATE
+  $<$<BOOL:${UAV_HAVE_TFLITE}>:UAV_HAVE_TFLITE=1>
+  $<$<NOT:$<BOOL:${UAV_HAVE_TFLITE}>>:UAV_HAVE_TFLITE=0>
+)
 
 set_target_properties(uav_acoustic_gui PROPERTIES WIN32_EXECUTABLE TRUE)
 

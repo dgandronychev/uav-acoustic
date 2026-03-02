@@ -119,7 +119,7 @@ public:
         auto* leftHeader = new QLabel(QString::fromUtf8("The command post"), leftPanel); 
         leftHeader->setAlignment(Qt::AlignCenter);
         leftHeader->setStyleSheet("background:#2C77D1; font-weight:700; font-size:16px; padding:8px; border:1px solid #9DB7D7;");
-        auto* leftText = new QLabel(QString::fromUtf8("rezerv"), leftPanel);
+        auto* leftText = new QLabel(QString::fromUtf8(""), leftPanel);
         leftText->setStyleSheet("color:#BFD3EE; padding:12px;");
         leftLayout->addWidget(leftHeader);
         leftLayout->addWidget(leftText);
@@ -306,6 +306,15 @@ private:
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
+    
+    const QStringList args = app.arguments();
+    if (args.size() < 2) {
+        std::cerr << "Usage: " << argv[0] << " <audio_file_path>\n";
+        return 1;
+    }
+
+    const std::string audio_path = std::filesystem::path(args.at(1).toStdString()).string();
+
 
     auto bus = std::make_shared<core::telemetry::TelemetryBus>();
 
@@ -388,7 +397,6 @@ int main(int argc, char* argv[]) {
     // ---- Audio replay + PCEN + detector thread ----
     std::atomic<bool> running{ true };
     std::thread audio_thread([&] {
-        std::string path = "C:/Users/Owner/_pish/test_orig.flac";
 
         core::audio::AudioSourceConfig acfg;
         acfg.sample_rate = 22050;
@@ -397,7 +405,7 @@ int main(int argc, char* argv[]) {
         acfg.realtime = true;
         acfg.loop = true;
 
-        core::audio::SndfileReplaySource src(path);
+        core::audio::SndfileReplaySource src(audio_path);
         if (!src.Open(acfg)) {
             while (running.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
             return;

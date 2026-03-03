@@ -22,6 +22,8 @@
 #include <deque>
 #include <iostream>
 #include <filesystem>
+#include <cstdlib>
+#include <optional>
 
 #include "core/telemetry/telemetry_bus.h"
 #include "core/telemetry/telemetry_snapshot.h"
@@ -45,6 +47,16 @@
 static std::int64_t now_ns() {
     using namespace std::chrono;
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+}
+static std::optional<std::string> GetArgValue(int argc, char* argv[], const std::string& key) {
+    const std::string prefix = key + "=";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg.rfind(prefix, 0) == 0) {
+            return arg.substr(prefix.size());
+        }
+    }
+    return std::nullopt;
 }
 class PlotWidget final : public QWidget {
 public:
@@ -314,14 +326,28 @@ private:
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     
+    std::string audio_path = "audio.flac";
     const QStringList args = app.arguments();
-    if (args.size() < 2) {
-        std::cerr << "Usage: " << argv[0] << " <audio_file_path>\n";
-        return 1;
+    if (args.size() >= 2 && !args.at(1).startsWith("--")) {
+        audio_path = std::filesystem::path(args.at(1).toStdString()).string();
     }
 
-    const std::string audio_path = std::filesystem::path(args.at(1).toStdString()).string();
+    const auto arg_audio = GetArgValue(argc, argv, "--audio_file");
+    const auto arg_model = GetArgValue(argc, argv, "--tflite_model");
+    const auto arg_labels = GetArgValue(argc, argv, "--tflite_labels");
 
+    const char* env_audio = std::getenv("UAV_AUDIO_FILE");
+    const char* env_model = std::getenv("UAV_TFLITE_MODEL");
+    const char* env_labels = std::getenv("UAV_TFLITE_LABELS");
+
+    if (arg_audio.has_value()) {
+        audio_path = std::filesystem::path(arg_audio.value()).string();
+    }
+    else if (env_audio != nullptr && env_audio[0] != '\0') {
+        audio_path = std::filesystem::path(env_audio).string();
+    }
+
+    std::cout << "[AUDIO] configured source file: " << audio_path << "\n";
 
     auto bus = std::make_shared<core::telemetry::TelemetryBus>();
 
@@ -348,15 +374,21 @@ int main(int argc, char* argv[]) {
     core::dsp::PcenExtractor pcen(pcfg);
 
 #if UAV_HAVE_TFLITE
-    // --- Mock detector (without TFLite dependency) ---
+    // --- TCN detector (TensorFlow Lite) ---
     core::ml::TcnDetector::Config tcfg;
-    tcfg.model_path = "model_dynamic.tflite";
-    tcfg.class_names_path = "class_names.txt";
+    tcfg.model_path = arg_model.value_or(env_model ? env_model : "model_dynamic.tflite");
+    tcfg.class_names_path = arg_labels.value_or(env_labels ? env_labels : "class_names.txt");
     tcfg.n_mels = 128;
     tcfg.n_frames = 169;
     core::ml::TcnDetector tcn(tcfg);
+    std::cout << "[DETECTOR] configured TFLite model: " << tcfg.model_path << "\n";
+    std::cout << "[DETECTOR] configured labels file: " << tcfg.class_names_path << "\n";
     std::cout << "[DETECTOR] TCN compile-time enabled, runtime status: "
         << (tcn.IsValid() ? "READY" : "NOT READY (fallback to MOCK)") << "\n";
+    if (!tcn.IsValid()) {
+        std::cout << "[DETECTOR] Hint: pass --tflite_model=/path/model.tflite and --tflite_labels=/path/class_names.txt\n"
+            << "           or use env UAV_TFLITE_MODEL / UAV_TFLITE_LABELS\n";
+    }
 #else
     std::cout << "[DETECTOR] TCN compile-time disabled, using MOCK detector\n";
 #endif

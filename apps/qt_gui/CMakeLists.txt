@@ -225,17 +225,23 @@ target_compile_features(core_segment PUBLIC cxx_std_20)
 option(UAV_ENABLE_TFLITE "Enable TensorFlow Lite integration" OFF)
 
 set(UAV_HAVE_TFLITE OFF)
+set(UAV_TFLITE_TARGET "")
 
 if (UAV_ENABLE_TFLITE)
   find_package(tensorflowlite CONFIG QUIET)
+  find_package(tensorflow-lite CONFIG QUIET)
 
   if (TARGET tensorflow::tensorflowlite)
+    set(UAV_TFLITE_TARGET tensorflow::tensorflowlite)
+    set(UAV_HAVE_TFLITE ON)
+  elseif (TARGET tensorflow-lite::tensorflow-lite)
+    set(UAV_TFLITE_TARGET tensorflow-lite::tensorflow-lite)
     set(UAV_HAVE_TFLITE ON)
   else()
     message(WARNING
       "TensorFlow Lite not found (tensorflowliteConfig.cmake). "
       "core_tflite будет отключён. "
-      "Если нужен TFLite — подключите Conan toolchain/пакет, который экспортирует tensorflow::tensorflowlite."
+      "Если нужен TFLite — подключите Conan/vcpkg toolchain и пакет TensorFlow Lite."
     )
   endif()
 endif()
@@ -263,7 +269,7 @@ if (UAV_HAVE_TFLITE)
   )
 
   target_link_libraries(core_tflite PUBLIC
-    tensorflow::tensorflowlite
+     ${UAV_TFLITE_TARGET}
   )
 
   target_compile_features(core_tflite PUBLIC cxx_std_20)
